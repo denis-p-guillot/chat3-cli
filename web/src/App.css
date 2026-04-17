@@ -987,6 +987,12 @@
   margin-top: 0.3rem;
 }
 
+.ssh-head-actions {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .ssh-form input,
 .ssh-form textarea,
 .ssh-form select {
@@ -1020,18 +1026,6 @@
   gap: 0.35rem;
 }
 
-.ssh-list li {
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: rgba(0, 0, 0, 0.18);
-  padding: 0.35rem 0.45rem;
-  cursor: grab;
-}
-
-.ssh-list li:active {
-  cursor: grabbing;
-}
-
 .ssh-line {
   display: flex;
   flex-direction: column;
@@ -1040,13 +1034,118 @@
 }
 
 .ssh-actions {
-  margin-top: 0.35rem;
   display: flex;
   gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+
+.ssh-actions .workspace-refresh-btn {
+  white-space: nowrap;
+}
+
+.ssh-icon-btn {
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ssh-icon-btn:hover:not(:disabled) {
+  color: var(--text);
+  background: rgba(139, 92, 246, 0.16);
+  border-color: rgba(167, 139, 250, 0.35);
+}
+
+.ssh-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ssh-icon-svg {
+  width: 0.92rem;
+  height: 0.92rem;
 }
 
 .ssh-mode {
   font-size: 0.72rem;
+}
+
+.ssh-editor-hint {
+  margin: 0.1rem 0 0.2rem;
+  font-size: 0.74rem;
+}
+
+.ssh-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ssh-buttons-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.5rem;
+}
+
+.ssh-button-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.35rem;
+  align-items: stretch;
+}
+
+.ssh-conn-btn {
+  flex: 1;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--text);
+  padding: 0.42rem 0.5rem;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.ssh-conn-btn:active {
+  cursor: grabbing;
+}
+
+.ssh-conn-btn:hover {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(167, 139, 250, 0.35);
+}
+
+.ssh-conn-btn strong {
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.ssh-conn-btn span {
+  font-size: 0.73rem;
+  color: var(--muted);
+  line-height: 1.2;
+}
+
+@media (max-width: 1080px) {
+  .ssh-button-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ssh-actions {
+    justify-content: flex-start;
+  }
 }
 
 .workspace-link-btn {

@@ -177,6 +177,14 @@ function IconToolbox({ className }: { className?: string }) {
   )
 }
 
+function IconEdit({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 20h4l10-10a2.2 2.2 0 10-3.1-3.1L4.9 16.9 4 20z" />
+    </svg>
+  )
+}
+
 function buildApiPayload(messages: ChatMsg[]): ChatMessagePayload[] {
   const out: ChatMessagePayload[] = []
   for (const m of messages) {
@@ -446,6 +454,9 @@ function ChatSession({
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
   const [sshBusy, setSshBusy] = useState(false)
   const [sshErr, setSshErr] = useState<string | null>(null)
+  const [sshOpen, setSshOpen] = useState(false)
+  const [sshEditorOpen, setSshEditorOpen] = useState(false)
+  const [sshEditingName, setSshEditingName] = useState<string | null>(null)
   const [sshForm, setSshForm] = useState({
     name: '',
     host: '',
@@ -881,12 +892,44 @@ function ChatSession({
         password: sshForm.password,
       })
       setSshForm((x) => ({ ...x, private_key: '', password: '' }))
+      setSshEditingName(null)
+      setSshEditorOpen(false)
       await refreshSshConnections()
     } catch (err) {
       setSshErr(err instanceof Error ? err.message : String(err))
     } finally {
       setSshBusy(false)
     }
+  }
+
+  const startNewSsh = () => {
+    setSshOpen(true)
+    setSshEditorOpen(true)
+    setSshEditingName(null)
+    setSshForm({
+      name: '',
+      host: '',
+      port: 22,
+      username: '',
+      auth_mode: 'private_key',
+      private_key: '',
+      password: '',
+    })
+  }
+
+  const editSsh = (c: SshConnection) => {
+    setSshOpen(true)
+    setSshEditorOpen(true)
+    setSshEditingName(c.name)
+    setSshForm({
+      name: c.name,
+      host: c.host,
+      port: c.port,
+      username: c.username,
+      auth_mode: c.auth_mode,
+      private_key: '',
+      password: '',
+    })
   }
 
   const removeSsh = async (id: number) => {
@@ -1119,115 +1162,167 @@ function ChatSession({
         </div>
 
         <div className="sidebar-section sidebar-widget">
-          <h2>Connectivity (SSH)</h2>
-          <form className="ssh-form" onSubmit={(e) => void submitSsh(e)}>
-            <input
-              value={sshForm.name}
-              onChange={(e) => setSshForm((x) => ({ ...x, name: e.target.value }))}
-              placeholder="Connection name (e.g. prod)"
-              required
-              maxLength={128}
-            />
-            <input
-              value={sshForm.host}
-              onChange={(e) => setSshForm((x) => ({ ...x, host: e.target.value }))}
-              placeholder="Host (e.g. server.example.com)"
-              required
-              maxLength={255}
-            />
-            <div className="ssh-inline">
-              <input
-                value={sshForm.username}
-                onChange={(e) => setSshForm((x) => ({ ...x, username: e.target.value }))}
-                placeholder="Username"
-                required
-                maxLength={128}
-              />
-              <input
-                type="number"
-                value={sshForm.port}
-                onChange={(e) => setSshForm((x) => ({ ...x, port: Number(e.target.value) || 22 }))}
-                min={1}
-                max={65535}
-                placeholder="Port"
-              />
-            </div>
-            <select
-              value={sshForm.auth_mode}
-              onChange={(e) =>
-                setSshForm((x) => ({
-                  ...x,
-                  auth_mode: e.target.value as 'private_key' | 'password' | 'private_key_password',
-                }))
-              }
-            >
-              <option value="private_key">Private key</option>
-              <option value="password">Password</option>
-              <option value="private_key_password">Private key + password</option>
-            </select>
-            {sshForm.auth_mode !== 'password' && (
-              <textarea
-                value={sshForm.private_key}
-                onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
-                placeholder="Private key (PEM)"
-                rows={4}
-                required
-              />
-            )}
-            {sshForm.auth_mode !== 'private_key' && (
-              <input
-                type="password"
-                value={sshForm.password}
-                onChange={(e) => setSshForm((x) => ({ ...x, password: e.target.value }))}
-                placeholder="Password"
-                required
-              />
-            )}
-            <button type="submit" className="btn secondary" disabled={sshBusy}>
-              Save connection
-            </button>
-          </form>
+          <h2>
+            <span>Connectivity (SSH)</span>
+            <span className="ssh-head-actions">
+              <button type="button" className="workspace-refresh-btn" onClick={startNewSsh} disabled={sshBusy}>
+                New
+              </button>
+              <button
+                type="button"
+                className="workspace-refresh-btn"
+                onClick={() => setSshOpen((v) => !v)}
+                aria-label={sshOpen ? 'Collapse connectivity section' : 'Expand connectivity section'}
+              >
+                {sshOpen ? 'Hide' : 'Show'}
+              </button>
+            </span>
+          </h2>
           {sshErr && <p className="warn">{sshErr}</p>}
-          {sshConnections.length > 0 && (
-            <ul className="ssh-list">
-              {sshConnections.map((c) => (
-                <li
-                  key={c.id}
-                  draggable
-                  onDragStart={(e) => {
-                    e.dataTransfer.setData(SSH_CONNECTION_DRAG_TYPE, c.name)
-                    e.dataTransfer.effectAllowed = 'copy'
-                  }}
-                  title="Drag to Toolbox > Diagnose Error"
-                >
-                  <div className="ssh-line">
-                    <strong>{c.name}</strong>
-                    <span className="muted">
-                      {c.username}@{c.host}:{c.port}
-                    </span>
-                    <span className="muted ssh-mode">
-                      {c.auth_mode === 'private_key' ? 'Key' : c.auth_mode === 'password' ? 'Password' : 'Key + Password'}
-                    </span>
+          {sshOpen && (
+            <>
+              {sshEditorOpen && (
+                <form className="ssh-form" onSubmit={(e) => void submitSsh(e)}>
+                  <input
+                    value={sshForm.name}
+                    onChange={(e) => setSshForm((x) => ({ ...x, name: e.target.value }))}
+                    placeholder="Connection name (e.g. prod)"
+                    required
+                    maxLength={128}
+                  />
+                  <input
+                    value={sshForm.host}
+                    onChange={(e) => setSshForm((x) => ({ ...x, host: e.target.value }))}
+                    placeholder="Host (e.g. server.example.com)"
+                    required
+                    maxLength={255}
+                  />
+                  <div className="ssh-inline">
+                    <input
+                      value={sshForm.username}
+                      onChange={(e) => setSshForm((x) => ({ ...x, username: e.target.value }))}
+                      placeholder="Username"
+                      required
+                      maxLength={128}
+                    />
+                    <input
+                      type="number"
+                      value={sshForm.port}
+                      onChange={(e) => setSshForm((x) => ({ ...x, port: Number(e.target.value) || 22 }))}
+                      min={1}
+                      max={65535}
+                      placeholder="Port"
+                    />
                   </div>
-                  <div className="ssh-actions">
+                  <select
+                    value={sshForm.auth_mode}
+                    onChange={(e) =>
+                      setSshForm((x) => ({
+                        ...x,
+                        auth_mode: e.target.value as 'private_key' | 'password' | 'private_key_password',
+                      }))
+                    }
+                  >
+                    <option value="private_key">Private key</option>
+                    <option value="password">Password</option>
+                    <option value="private_key_password">Private key + password</option>
+                  </select>
+                  {sshForm.auth_mode !== 'password' && (
+                    <textarea
+                      value={sshForm.private_key}
+                      onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
+                      placeholder="Private key (PEM)"
+                      rows={4}
+                      required
+                    />
+                  )}
+                  {sshForm.auth_mode !== 'private_key' && (
+                    <input
+                      type="password"
+                      value={sshForm.password}
+                      onChange={(e) => setSshForm((x) => ({ ...x, password: e.target.value }))}
+                      placeholder="Password"
+                      required
+                    />
+                  )}
+                  <p className="muted ssh-editor-hint">
+                    {sshEditingName
+                      ? `Editing "${sshEditingName}". Provide credentials to update this connection.`
+                      : 'Create a new SSH connection profile.'}
+                  </p>
+                  <div className="ssh-editor-actions">
+                    <button type="submit" className="btn secondary" disabled={sshBusy}>
+                      {sshEditingName ? 'Update connection' : 'Save connection'}
+                    </button>
                     <button
                       type="button"
                       className="workspace-refresh-btn"
-                      onClick={() => addDiagnoseSshConnection(c.name)}
-                      disabled={sshBusy}
+                      onClick={() => {
+                        setSshEditorOpen(false)
+                        setSshEditingName(null)
+                      }}
                     >
-                      Use
-                    </button>
-                    <button type="button" className="workspace-refresh-btn" onClick={() => void testSsh(c.id)} disabled={sshBusy}>
-                      Test
-                    </button>
-                    <button type="button" className="workspace-refresh-btn" onClick={() => void removeSsh(c.id)} disabled={sshBusy}>
-                      Delete
+                      Close
                     </button>
                   </div>
-                </li>
-              ))}
-            </ul>
+                </form>
+              )}
+              {sshConnections.length > 0 && (
+                <div className="ssh-buttons-list">
+                  {sshConnections.map((c) => (
+                    <div key={c.id} className="ssh-button-row">
+                      <button
+                        type="button"
+                        className="ssh-conn-btn"
+                        draggable
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData(SSH_CONNECTION_DRAG_TYPE, c.name)
+                          e.dataTransfer.effectAllowed = 'copy'
+                        }}
+                        title="Drag to Toolbox > Diagnose Error."
+                      >
+                        <strong>{c.name}</strong>
+                        <span>
+                          {c.username}@{c.host}:{c.port}
+                        </span>
+                      </button>
+                      <div className="ssh-actions">
+                        <button
+                          type="button"
+                          className="ssh-icon-btn"
+                          onClick={() => editSsh(c)}
+                          aria-label={`Edit SSH connection ${c.name}`}
+                          title="Edit connection"
+                          disabled={sshBusy}
+                        >
+                          <IconEdit className="ssh-icon-svg" />
+                        </button>
+                        {sshEditorOpen && sshEditingName === c.name && (
+                          <>
+                            <button
+                              type="button"
+                              className="workspace-refresh-btn"
+                              onClick={() => void testSsh(c.id)}
+                              disabled={sshBusy}
+                            >
+                              Test
+                            </button>
+                            <button
+                              type="button"
+                              className="workspace-refresh-btn"
+                              onClick={() => void removeSsh(c.id)}
+                              disabled={sshBusy}
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
