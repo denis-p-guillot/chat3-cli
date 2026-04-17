@@ -50,8 +50,10 @@ Behavior rules:
   3. inspect diff
   4. commit changes if requested
 - Do not invent repository state or file contents you have not read via tools.
+- For remote host work, first call `ssh_list_connections` to discover profiles available to the current authenticated user, then call `ssh_exec` with one of those exact connection names.
 - Briefly explain what you changed after successful edits.
 - Use markdown when useful.
+- For remote server work, call `ssh_list_connections` first to discover the authenticated user's saved profiles, then use `ssh_exec` with one of those names.
 
 Important stopping rules:
 - Use the minimum number of tool calls needed.
@@ -148,6 +150,7 @@ ARCHIVE_MAX_LIST_ENTRIES = 5_000
 GREP_MAX_MATCHES = 2_000
 MAX_TOOL_ROUNDS = 50
 GIT_TIMEOUT_SECONDS = 180
+MODEL_REQUEST_TIMEOUT_SECONDS = 120
 
 console = Console()
 
@@ -1703,7 +1706,7 @@ def iter_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> Iterator[d
     input_items: list[Any] = build_input_messages(history)
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.responses.create(
+        response = client.with_options(timeout=MODEL_REQUEST_TIMEOUT_SECONDS).responses.create(
             model=MODEL,
             instructions=SYSTEM_PROMPT,
             input=input_items,

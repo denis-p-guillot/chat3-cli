@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import queue
+import re
 import secrets
 import threading
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -434,6 +437,237 @@ class SshConnectionIn(BaseModel):
     password: str | None = Field(default=None, max_length=10_000)
 
 
+class DiagnoseErrorBody(BaseModel):
+    context: str = Field(default="", max_length=200_000)
+    ssh_connections: list[str] = Field(default_factory=list, max_length=50)
+
+
+def _render_issue_analysis_html(
+    context: str,
+    user_id: int,
+    workspace_id: int,
+    ssh_connections: list[dict[str, Any]],
+) -> str:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    safe_context = html.escape(context.strip() or "(No context provided)")
+    ssh_items = "".join(
+        f"<li><code>{html.escape(c['name'])}</code> — {html.escape(c['username'])}@{html.escape(c['host'])}:{int(c['port'])} ({html.escape(c['auth_mode'])})</li>"
+        for c in ssh_connections
+    )
+    ssh_section = (
+        f"""
+    <section class="section">
+      <h2>SSH Access Scope</h2>
+      <p>The following saved SSH connections were explicitly attached to this diagnosis run:</p>
+      <ul>{ssh_items}</ul>
+      <p>These can be used for remote checks (logs/processes/config) in follow-up investigation steps.</p>
+    </section>
+"""
+        if ssh_connections
+        else """
+    <section class="section">
+      <h2>SSH Access Scope</h2>
+      <p>No SSH connections were attached to this diagnosis run.</p>
+    </section>
+"""
+    )
+    remote_cards = "".join(
+        f"""
+    <section class="section">
+      <h2>Remote Diagnostics: {html.escape(str(c.get('name', 'unknown')))}</h2>
+      <p><strong>Target:</strong> {html.escape(str(c.get('username', '')))}@{html.escape(str(c.get('host', '')))}:{int(c.get('port', 22))}</p>
+      <p><strong>Status:</strong> {html.escape(str(c.get('status', 'unknown')))}</p>
+      <h3>Findings</h3>
+      <ul>{"".join(f"<li>{html.escape(x)}</li>" for x in c.get('findings', [])) or "<li>No automatic findings.</li>"}</ul>
+      <h3>Nginx logs</h3>
+      <pre>{html.escape(str(c.get('nginx_logs', '(no data)')))}</pre>
+      <h3>Odoo logs</h3>
+      <pre>{html.escape(str(c.get('odoo_logs', '(no data)')))}</pre>
+      <h3>PostgreSQL logs</h3>
+      <pre>{html.escape(str(c.get('postgres_logs', '(no data)')))}</pre>
+      <h3>pg_stat_statements</h3>
+      <pre>{html.escape(str(c.get('pg_stat_statements', '(no data)')))}</pre>
+    </section>
+"""
+        for c in ssh_connections
+        if c.get("diagnostics")
+    )
+    if not remote_cards:
+        remote_cards = """
+    <section class="section">
+      <h2>Remote Diagnostics</h2>
+      <p>No remote diagnostics were executed in this run.</p>
+    </section>
+"""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PurpleCloud Issue Investigation Report</title>
+  <style>
+    :root {{
+      --bg:#0c0815; --panel:#171027; --panel2:#201635; --text:#f3ecff; --muted:#b8a9d6;
+      --line:#3a2b5c; --accent:#8b5cf6; --accent2:#c4b5fd;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0;
+      font-family:'Plus Jakarta Sans',Inter,Segoe UI,Roboto,Arial,sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(139,92,246,.17), transparent 30%),
+        radial-gradient(circle at top right, rgba(124,58,237,.16), transparent 25%),
+        linear-gradient(180deg, #10091a 0%, var(--bg) 100%);
+      color:var(--text);
+    }}
+    .wrap {{ max-width:980px; margin:0 auto; padding:32px 20px 64px; }}
+    .hero {{ border:1px solid rgba(192,132,252,.22); border-radius:20px; padding:28px; background:linear-gradient(135deg,rgba(168,85,247,.2),rgba(124,58,237,.15)); box-shadow:0 18px 40px rgba(0,0,0,.35); }}
+    .section {{ margin-top:16px; border:1px solid rgba(184,169,214,.14); border-radius:16px; padding:20px; background:rgba(23,16,39,.86); box-shadow:0 10px 28px rgba(0,0,0,.25); }}
+    .eyebrow {{ font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--accent2); }}
+    h1,h2 {{ margin:0 0 10px; }}
+    p,li {{ color:var(--muted); line-height:1.6; }}
+    pre {{ background:#120d1f; border:1px solid var(--line); border-radius:10px; padding:14px; white-space:pre-wrap; word-break:break-word; color:#f3e8ff; }}
+    .footer {{ margin-top:20px; color:#a997ca; font-size:.88rem; text-align:center; border-top:1px solid rgba(184,169,214,.15); padding-top:14px; }}
+    a {{ color:#c4b5fd; text-decoration:none; }}
+    a:hover {{ text-decoration:underline; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="eyebrow">PurpleCloud Report</div>
+      <h1>Issue Investigation Report</h1>
+      <p>Generated automatically by <strong>Diagnose Error</strong> for workspace <strong>{workspace_id}</strong> (user {user_id}) using PurpleCloud styling conventions.</p>
+    </section>
+    <section class="section">
+      <h2>Provided Context</h2>
+      <pre>{safe_context}</pre>
+    </section>
+    <section class="section">
+      <h2>Initial Analysis Checklist</h2>
+      <ul>
+        <li>Confirm reproducible steps and expected vs actual behavior.</li>
+        <li>Collect server logs, browser console logs, and recent deploy or config changes.</li>
+        <li>Identify impacted modules, requests, and potential loops/timeouts.</li>
+        <li>Validate data integrity and permission/auth side effects.</li>
+      </ul>
+    </section>
+{ssh_section}
+{remote_cards}
+    <section class="section">
+      <h2>Next Actions</h2>
+      <p>Use this report as the baseline artifact. Add concrete findings, stack traces, and patch recommendations.</p>
+    </section>
+    <div class="footer">
+      Generated at {now} · Styled for PurpleCloud<br/>
+      <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">purple-cloud.ai</a>
+    </div>
+  </div>
+</body>
+</html>
+"""
+
+
+def _extract_tagged(body: str, tag: str) -> str:
+    m = re.search(rf"===BEGIN_{re.escape(tag)}===\n(.*?)\n===END_{re.escape(tag)}===", body, flags=re.S)
+    if not m:
+        return "(not found)"
+    return (m.group(1) or "").strip() or "(empty)"
+
+
+def _analyze_remote_text(nginx_logs: str, odoo_logs: str, pg_logs: str, pg_stats: str) -> list[str]:
+    findings: list[str] = []
+    def _count(pattern: str, text: str) -> int:
+        return len(re.findall(pattern, text, flags=re.I))
+
+    n_5xx = _count(r"\b50[0-9]\b", nginx_logs)
+    if n_5xx:
+        findings.append(f"Nginx shows {n_5xx} HTTP 5xx occurrences in sampled lines.")
+    n_odoo_err = _count(r"\b(error|traceback|exception)\b", odoo_logs)
+    if n_odoo_err:
+        findings.append(f"Odoo logs contain {n_odoo_err} error/traceback keywords in sampled lines.")
+    n_pg_err = _count(r"\b(error|fatal|panic|canceling statement)\b", pg_logs)
+    if n_pg_err:
+        findings.append(f"PostgreSQL logs contain {n_pg_err} error/fatal keywords in sampled lines.")
+    if "pg_stat_statements extension is not available" in pg_stats.lower():
+        findings.append("pg_stat_statements extension is not available on this server.")
+    elif pg_stats and pg_stats not in {"(not found)", "(empty)"}:
+        findings.append("pg_stat_statements returned top slow/expensive query summary.")
+    if not findings:
+        findings.append("No obvious high-signal errors detected in sampled logs.")
+    return findings
+
+
+def _collect_remote_diagnostics(row: SshConnectionRow, key: str | None, password: str | None) -> dict[str, Any]:
+    script = r"""
+set +e
+echo "===BEGIN_NGINX==="
+if [ -f /var/log/nginx/error.log ]; then
+  tail -n 200 /var/log/nginx/error.log 2>/dev/null
+elif [ -f /var/log/nginx/access.log ]; then
+  tail -n 200 /var/log/nginx/access.log 2>/dev/null
+else
+  (journalctl -u nginx -n 200 --no-pager 2>/dev/null || true)
+fi
+echo "===END_NGINX==="
+
+echo "===BEGIN_ODOO==="
+if [ -f /var/log/odoo/odoo.log ]; then
+  tail -n 250 /var/log/odoo/odoo.log 2>/dev/null
+elif [ -f /var/log/odoo.log ]; then
+  tail -n 250 /var/log/odoo.log 2>/dev/null
+else
+  (journalctl -u odoo -n 250 --no-pager 2>/dev/null || true)
+fi
+echo "===END_ODOO==="
+
+echo "===BEGIN_PGLOG==="
+if [ -f /var/log/postgresql/postgresql.log ]; then
+  tail -n 250 /var/log/postgresql/postgresql.log 2>/dev/null
+elif [ -d /var/log/postgresql ]; then
+  tail -n 250 /var/log/postgresql/*.log 2>/dev/null
+else
+  (journalctl -u postgresql -n 250 --no-pager 2>/dev/null || true)
+fi
+echo "===END_PGLOG==="
+
+echo "===BEGIN_PGSTATS==="
+if command -v psql >/dev/null 2>&1; then
+  psql -X -A -F $'\t' -d postgres -c "SELECT queryid,calls,total_exec_time,mean_exec_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_exec_time DESC NULLS LAST LIMIT 15;" 2>/dev/null \
+    || psql -X -A -F $'\t' -d postgres -c "SELECT queryid,calls,total_time,mean_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_time DESC NULLS LAST LIMIT 15;" 2>/dev/null \
+    || echo "pg_stat_statements extension is not available or access is denied."
+else
+  echo "psql is not installed on remote host."
+fi
+echo "===END_PGSTATS==="
+"""
+    res = run_ssh_command(
+        host=row.host,
+        port=row.port,
+        username=row.username,
+        auth_mode=row.auth_mode,
+        private_key=key,
+        password=password,
+        command=f"bash -lc {json.dumps(script)}",
+        timeout_seconds=120,
+    )
+    body = (res.get("stdout", "") or "") + ("\n" + res.get("stderr", "") if res.get("stderr") else "")
+    nginx_logs = _extract_tagged(body, "NGINX")
+    odoo_logs = _extract_tagged(body, "ODOO")
+    postgres_logs = _extract_tagged(body, "PGLOG")
+    pg_stats = _extract_tagged(body, "PGSTATS")
+    return {
+        "diagnostics": True,
+        "status": "ok" if res.get("ok") else "warning",
+        "nginx_logs": nginx_logs,
+        "odoo_logs": odoo_logs,
+        "postgres_logs": postgres_logs,
+        "pg_stat_statements": pg_stats,
+        "findings": _analyze_remote_text(nginx_logs, odoo_logs, postgres_logs, pg_stats),
+        "returncode": res.get("returncode"),
+    }
+
+
 def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -524,6 +758,58 @@ def ssh_connections_test(connection_id: int, user: UserRow = Depends(get_current
         "stderr": result.get("stderr", ""),
         "returncode": result.get("returncode"),
     }
+
+
+@app.post("/api/tools/diagnose-error")
+def tools_diagnose_error(
+    body: DiagnoseErrorBody,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    attached: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for name in body.ssh_connections:
+        clean = name.strip()
+        if not clean or clean in seen:
+            continue
+        seen.add(clean)
+        row = next((r for r in list_ssh_connections(user.id) if r.name == clean), None)
+        if row is None:
+            continue
+        info: dict[str, Any] = {
+            "name": row.name,
+            "host": row.host,
+            "port": row.port,
+            "username": row.username,
+            "auth_mode": row.auth_mode,
+        }
+        key: str | None = None
+        password: str | None = None
+        try:
+            if row.private_key_encrypted:
+                key = decrypt_api_key(row.private_key_encrypted)
+            if row.password_encrypted:
+                password = decrypt_api_key(row.password_encrypted)
+        except Exception as exc:
+            info["diagnostics"] = True
+            info["status"] = "error"
+            info["findings"] = [f"Could not decrypt SSH credentials: {exc}"]
+            info["nginx_logs"] = "(credential decryption failed)"
+            info["odoo_logs"] = "(credential decryption failed)"
+            info["postgres_logs"] = "(credential decryption failed)"
+            info["pg_stat_statements"] = "(credential decryption failed)"
+            attached.append(info)
+            continue
+        info.update(_collect_remote_diagnostics(row, key, password))
+        attached.append(info)
+    root = ensure_named_workspace_layout(user.id, ws_id)
+    out_path = root / "issue_analysis.html"
+    out_path.write_text(
+        _render_issue_analysis_html(body.context, user.id, ws_id, attached),
+        encoding="utf-8",
+    )
+    rel = f"users/{user.id}/w/{ws_id}/issue_analysis.html"
+    return {"status": "ok", "path": rel, "name": "issue_analysis.html", "ssh_connections": attached}
 
 
 @app.get("/api/workspaces")

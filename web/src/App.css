@@ -100,6 +100,12 @@
   box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.12);
 }
 
+.icon-btn-active {
+  background: rgba(109, 40, 217, 0.26);
+  border-color: rgba(196, 181, 253, 0.5);
+  color: #ede9fe;
+}
+
 .brand-mark {
   position: relative;
   overflow: hidden;
@@ -174,6 +180,56 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 0.55rem;
+}
+
+.toolbox-item h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.92rem;
+  color: #e9d5ff;
+}
+
+.toolbox-help {
+  margin: 0 0 0.45rem;
+  font-size: 0.76rem;
+}
+
+.toolbox-item.toolbox-drop {
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 2px rgba(167, 139, 250, 0.35);
+  background: rgba(139, 92, 246, 0.08);
+}
+
+.toolbox-ssh-list {
+  list-style: none;
+  margin: 0 0 0.45rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.toolbox-ssh-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.74rem;
+}
+
+.toolbox-textarea {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0.45rem;
+  resize: vertical;
+  margin-bottom: 0.45rem;
 }
 
 .meta-list {
@@ -815,6 +871,12 @@
   gap: 0.6rem;
 }
 
+.workspace-files-actions {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .workspace-files-head h2 {
   margin: 0;
 }
@@ -963,6 +1025,11 @@
   border-radius: 7px;
   background: rgba(0, 0, 0, 0.18);
   padding: 0.35rem 0.45rem;
+  cursor: grab;
+}
+
+.ssh-list li:active {
+  cursor: grabbing;
 }
 
 .ssh-line {

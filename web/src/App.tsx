@@ -40,9 +40,11 @@ import {
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
+import { runDiagnoseError } from './lib/tools'
 import './App.css'
 
 const WORKSPACE_PATH_DRAG_TYPE = 'application/x-purplecloud-workspace-path'
+const SSH_CONNECTION_DRAG_TYPE = 'application/x-purplecloud-ssh-connection'
 
 type ToolRow = {
   name: string
@@ -152,6 +154,25 @@ function IconStop({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
       <rect x="6.5" y="6.5" width="11" height="11" rx="2.2" />
+    </svg>
+  )
+}
+
+function IconToolbox({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      aria-hidden
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 8.5h18v10A2.5 2.5 0 0118.5 21h-13A2.5 2.5 0 013 18.5v-10z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 8.5V6.8A1.8 1.8 0 0110.8 5h2.4A1.8 1.8 0 0115 6.8v1.7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 12.5h18" />
     </svg>
   )
 }
@@ -393,6 +414,7 @@ function ChatSession({
   onLogout: () => void | Promise<void>
   onMeRefresh: () => Promise<void>
 }) {
+  const STREAM_STALL_TIMEOUT_MS = 130_000
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
@@ -406,6 +428,8 @@ function ChatSession({
     tools: [],
   })
   const abortRef = useRef<AbortController | null>(null)
+  const abortReasonRef = useRef<'user' | 'timeout' | null>(null)
+  const lastStreamEventAtRef = useRef<number>(0)
   const threadRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [historyHydrated, setHistoryHydrated] = useState(false)
@@ -415,8 +439,10 @@ function ChatSession({
   const [workspaceFilesBusy, setWorkspaceFilesBusy] = useState(false)
   const [workspaceFilesErr, setWorkspaceFilesErr] = useState<string | null>(null)
   const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
+  const [workspaceFilesOpen, setWorkspaceFilesOpen] = useState(false)
   const [workspaceSearch, setWorkspaceSearch] = useState('')
   const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
+  const [environmentOpen, setEnvironmentOpen] = useState(false)
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
   const [sshBusy, setSshBusy] = useState(false)
   const [sshErr, setSshErr] = useState<string | null>(null)
@@ -429,6 +455,12 @@ function ChatSession({
     private_key: '',
     password: '',
   })
+  const [toolboxOpen, setToolboxOpen] = useState(false)
+  const [diagnoseBusy, setDiagnoseBusy] = useState(false)
+  const [diagnoseErr, setDiagnoseErr] = useState<string | null>(null)
+  const [diagnoseContext, setDiagnoseContext] = useState('')
+  const [diagnoseSshConnections, setDiagnoseSshConnections] = useState<string[]>([])
+  const [toolboxDragOver, setToolboxDragOver] = useState(false)
 
   useEffect(() => {
     fetch('/api/meta', { credentials: 'include' })
@@ -528,6 +560,8 @@ function ChatSession({
   const runStream = async (payload: ChatMessagePayload[]) => {
     const ac = new AbortController()
     abortRef.current = ac
+    abortReasonRef.current = null
+    lastStreamEventAtRef.current = Date.now()
     setBusy(true)
     streamRef.current = { tools: [] }
     try {
@@ -549,6 +583,7 @@ function ChatSession({
           } else if (ev.type === 'error') {
             s.error = ev.message
           }
+          lastStreamEventAtRef.current = Date.now()
           setTick((x) => x + 1)
         },
         { signal: ac.signal },
@@ -578,6 +613,7 @@ function ChatSession({
       })
     } catch (e) {
       if (isAbortError(e)) {
+        const abortReason = abortReasonRef.current
         const fin = streamRef.current
         streamRef.current = { tools: [] }
         setTick((x) => x + 1)
@@ -592,7 +628,14 @@ function ChatSession({
               output: t.output ?? '',
             })
           }
-          if (fin.error) {
+          if (abortReason === 'timeout') {
+            next.push({
+              id: uid(),
+              role: 'assistant',
+              content:
+                '**Error:** Request timed out while waiting for the model response.\n\nYou can click **Retry** or send a shorter request.',
+            })
+          } else if (fin.error) {
             next.push({
               id: uid(),
               role: 'assistant',
@@ -616,6 +659,7 @@ function ChatSession({
     } finally {
       setBusy(false)
       abortRef.current = null
+      abortReasonRef.current = null
       streamRef.current = { tools: [] }
       setTick((x) => x + 1)
     }
@@ -700,8 +744,23 @@ function ChatSession({
   }
 
   const stop = () => {
+    abortReasonRef.current = 'user'
     abortRef.current?.abort()
   }
+
+  useEffect(() => {
+    if (!busy) return
+    const id = window.setInterval(() => {
+      const last = lastStreamEventAtRef.current || 0
+      if (!last) return
+      if (Date.now() - last < STREAM_STALL_TIMEOUT_MS) return
+      if (abortRef.current) {
+        abortReasonRef.current = 'timeout'
+        abortRef.current.abort()
+      }
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [busy])
 
   const retry = () => {
     if (busy || !historyHydrated || !canRetryFromMessages(messages)) return
@@ -857,6 +916,34 @@ function ChatSession({
     }
   }
 
+  const diagnoseError = async () => {
+    setDiagnoseErr(null)
+    setDiagnoseBusy(true)
+    try {
+      const out = await runDiagnoseError(diagnoseContext, diagnoseSshConnections)
+      addPendingWorkspacePath(out.path)
+      await refreshWorkspaceFiles()
+      setToolboxOpen(false)
+      setDiagnoseContext('')
+      setDiagnoseSshConnections([])
+      alert(`Report generated: ${out.name}\nLinked to your next prompt as ${out.path}`)
+    } catch (err) {
+      setDiagnoseErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDiagnoseBusy(false)
+    }
+  }
+
+  const addDiagnoseSshConnection = (name: string) => {
+    const clean = name.trim()
+    if (!clean) return
+    setDiagnoseSshConnections((prev) => (prev.includes(clean) ? prev : [...prev, clean]))
+  }
+
+  const removeDiagnoseSshConnection = (name: string) => {
+    setDiagnoseSshConnections((prev) => prev.filter((x) => x !== name))
+  }
+
   const live = busy ? streamRef.current : null
   const execStatusText = (() => {
     if (!busy) return ''
@@ -891,6 +978,19 @@ function ChatSession({
           <div className="brand-toolbar" role="toolbar" aria-label="Account actions">
             <button
               type="button"
+              className={`icon-btn ${toolboxOpen ? 'icon-btn-active' : ''}`}
+              onClick={() => {
+                setToolboxOpen((v) => !v)
+                setDiagnoseErr(null)
+                setToolboxDragOver(false)
+              }}
+              title="Toolbox"
+              aria-label="Toolbox"
+            >
+              <IconToolbox />
+            </button>
+            <button
+              type="button"
               className="icon-btn"
               onClick={() => setSettingsOpen(true)}
               title="Settings — API key and profile"
@@ -911,6 +1011,73 @@ function ChatSession({
             </button>
           </div>
         </div>
+
+        {toolboxOpen && (
+          <div className="sidebar-section sidebar-widget">
+            <h2>Toolbox</h2>
+            <div
+              className={`toolbox-item ${toolboxDragOver ? 'toolbox-drop' : ''}`}
+              onDragEnter={(e) => {
+                const hasSsh = Array.from(e.dataTransfer.types).includes(SSH_CONNECTION_DRAG_TYPE)
+                if (!hasSsh) return
+                e.preventDefault()
+                setToolboxDragOver(true)
+              }}
+              onDragOver={(e) => {
+                const hasSsh = Array.from(e.dataTransfer.types).includes(SSH_CONNECTION_DRAG_TYPE)
+                if (!hasSsh) return
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'copy'
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                setToolboxDragOver(false)
+              }}
+              onDrop={(e) => {
+                e.preventDefault()
+                setToolboxDragOver(false)
+                const name = e.dataTransfer.getData(SSH_CONNECTION_DRAG_TYPE)
+                if (name) addDiagnoseSshConnection(name)
+              }}
+            >
+              <h3>Diagnose Error</h3>
+              <p className="muted toolbox-help">
+                Generates <code>issue_analysis.html</code> in the active workspace and links it to your next prompt.
+              </p>
+              <p className="muted toolbox-help">
+                Drag SSH connections from the Connectivity widget here to grant diagnosis SSH scope.
+              </p>
+              {diagnoseSshConnections.length > 0 && (
+                <ul className="toolbox-ssh-list">
+                  {diagnoseSshConnections.map((name) => (
+                    <li key={name}>
+                      <span>{name}</span>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        onClick={() => removeDiagnoseSshConnection(name)}
+                        aria-label={`Remove SSH connection ${name}`}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <textarea
+                className="toolbox-textarea"
+                placeholder="Paste logs, traceback, or incident context..."
+                value={diagnoseContext}
+                onChange={(e) => setDiagnoseContext(e.target.value)}
+                rows={5}
+              />
+              {diagnoseErr && <p className="warn">{diagnoseErr}</p>}
+              <button type="button" className="btn secondary" onClick={() => void diagnoseError()} disabled={diagnoseBusy}>
+                {diagnoseBusy ? 'Generating…' : 'Run Diagnose Error'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="sidebar-section">
           <h2>Account</h2>
@@ -1024,7 +1191,15 @@ function ChatSession({
           {sshConnections.length > 0 && (
             <ul className="ssh-list">
               {sshConnections.map((c) => (
-                <li key={c.id}>
+                <li
+                  key={c.id}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(SSH_CONNECTION_DRAG_TYPE, c.name)
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                  title="Drag to Toolbox > Diagnose Error"
+                >
                   <div className="ssh-line">
                     <strong>{c.name}</strong>
                     <span className="muted">
@@ -1035,6 +1210,14 @@ function ChatSession({
                     </span>
                   </div>
                   <div className="ssh-actions">
+                    <button
+                      type="button"
+                      className="workspace-refresh-btn"
+                      onClick={() => addDiagnoseSshConnection(c.name)}
+                      disabled={sshBusy}
+                    >
+                      Use
+                    </button>
                     <button type="button" className="workspace-refresh-btn" onClick={() => void testSsh(c.id)} disabled={sshBusy}>
                       Test
                     </button>
@@ -1049,103 +1232,133 @@ function ChatSession({
         </div>
 
         <div className="sidebar-section sidebar-widget">
-          <h2>Environment</h2>
-          {metaErr && <p className="warn">Could not load /api/meta ({metaErr}). Is the API running?</p>}
-          {meta && (
-            <dl className="meta-list">
-              <div>
-                <dt>Model</dt>
-                <dd>{meta.model}</dd>
-              </div>
-              <div>
-                <dt>Workspace</dt>
-                <dd title={meta.workspace}>{shortPath(meta.workspace)}</dd>
-              </div>
-              <div>
-                <dt>Base dir</dt>
-                <dd title={meta.base_dir}>{shortPath(meta.base_dir)}</dd>
-              </div>
-              {meta.user_workspace && (
-                <div>
-                  <dt>Your workspace</dt>
-                  <dd title={meta.user_workspace}>{shortPath(meta.user_workspace)}</dd>
-                </div>
+          <h2>
+            <span>Environment</span>
+            <button
+              type="button"
+              className="workspace-refresh-btn"
+              onClick={() => setEnvironmentOpen((v) => !v)}
+              aria-label={environmentOpen ? 'Collapse environment section' : 'Expand environment section'}
+            >
+              {environmentOpen ? 'Hide' : 'Show'}
+            </button>
+          </h2>
+          {environmentOpen && (
+            <>
+              {metaErr && <p className="warn">Could not load /api/meta ({metaErr}). Is the API running?</p>}
+              {meta && (
+                <dl className="meta-list">
+                  <div>
+                    <dt>Model</dt>
+                    <dd>{meta.model}</dd>
+                  </div>
+                  <div>
+                    <dt>Workspace</dt>
+                    <dd title={meta.workspace}>{shortPath(meta.workspace)}</dd>
+                  </div>
+                  <div>
+                    <dt>Base dir</dt>
+                    <dd title={meta.base_dir}>{shortPath(meta.base_dir)}</dd>
+                  </div>
+                  {meta.user_workspace && (
+                    <div>
+                      <dt>Your workspace</dt>
+                      <dd title={meta.user_workspace}>{shortPath(meta.user_workspace)}</dd>
+                    </div>
+                  )}
+                  {meta.user_workspace_abs && (
+                    <div>
+                      <dt>Your folder (disk)</dt>
+                      <dd title={meta.user_workspace_abs}>{shortPath(meta.user_workspace_abs)}</dd>
+                    </div>
+                  )}
+                </dl>
               )}
-              {meta.user_workspace_abs && (
-                <div>
-                  <dt>Your folder (disk)</dt>
-                  <dd title={meta.user_workspace_abs}>{shortPath(meta.user_workspace_abs)}</dd>
-                </div>
-              )}
-            </dl>
+            </>
           )}
         </div>
 
         <div className="sidebar-section">
           <div className="workspace-files-head">
             <h2>Workspace files</h2>
-            <button
-              type="button"
-              className="workspace-refresh-btn"
-              onClick={() => void refreshWorkspaceFiles()}
-              disabled={workspaceFilesBusy}
-              aria-label="Refresh workspace files"
-              title="Refresh file list"
-            >
-              Refresh
-            </button>
-          </div>
-          <input
-            className="workspace-search"
-            value={workspaceSearch}
-            onChange={(e) => setWorkspaceSearch(e.target.value)}
-            placeholder="Search files..."
-            aria-label="Search workspace files"
-          />
-          {workspaceFilesErr && <p className="warn">Could not list files ({workspaceFilesErr}).</p>}
-          {!workspaceFilesErr && filteredWorkspaceEntries.length === 0 && !workspaceFilesBusy && (
-            <p className="muted workspace-empty">No files yet in this workspace.</p>
-          )}
-          {workspaceFilesBusy && <p className="muted workspace-empty">Loading files…</p>}
-          {filteredWorkspaceEntries.length > 0 && (
-            <ul className="workspace-files-list" aria-label="Workspace files">
-              {filteredWorkspaceEntries.map((entry) => (
-                <li
-                  key={`${entry.type}-${entry.path}`}
-                  draggable={entry.type === 'file'}
-                  onDragStart={(e) => {
-                    if (entry.type !== 'file') return
-                    e.dataTransfer.setData(WORKSPACE_PATH_DRAG_TYPE, entry.path)
-                    e.dataTransfer.setData('text/plain', entry.path)
-                    e.dataTransfer.effectAllowed = 'copy'
-                  }}
-                  title={entry.type === 'file' ? 'Drag to composer to link this file' : undefined}
+            <div className="workspace-files-actions">
+              {workspaceFilesOpen && (
+                <button
+                  type="button"
+                  className="workspace-refresh-btn"
+                  onClick={() => void refreshWorkspaceFiles()}
+                  disabled={workspaceFilesBusy}
+                  aria-label="Refresh workspace files"
+                  title="Refresh file list"
                 >
-                  <span className="workspace-file-kind" aria-hidden>
-                    {entry.type === 'dir' ? 'D' : 'F'}
-                  </span>
-                  <span className="workspace-file-path" title={entry.path}>
-                    {entry.path}
-                  </span>
-                  {entry.type === 'file' && typeof entry.size === 'number' && (
-                    <span className="workspace-file-size">{formatSize(entry.size)}</span>
-                  )}
-                  {entry.type === 'file' && (
-                    <button
-                      type="button"
-                      className="workspace-link-btn"
-                      onClick={() => addPendingWorkspacePath(entry.path)}
-                      disabled={pendingWorkspacePaths.includes(entry.path)}
+                  Refresh
+                </button>
+              )}
+              <button
+                type="button"
+                className="workspace-refresh-btn"
+                onClick={() => setWorkspaceFilesOpen((v) => !v)}
+                aria-label={workspaceFilesOpen ? 'Collapse workspace files section' : 'Expand workspace files section'}
+              >
+                {workspaceFilesOpen ? 'Hide' : 'Show'}
+              </button>
+            </div>
+          </div>
+          {workspaceFilesOpen && (
+            <>
+              <input
+                className="workspace-search"
+                value={workspaceSearch}
+                onChange={(e) => setWorkspaceSearch(e.target.value)}
+                placeholder="Search files..."
+                aria-label="Search workspace files"
+              />
+              {workspaceFilesErr && <p className="warn">Could not list files ({workspaceFilesErr}).</p>}
+              {!workspaceFilesErr && filteredWorkspaceEntries.length === 0 && !workspaceFilesBusy && (
+                <p className="muted workspace-empty">No files yet in this workspace.</p>
+              )}
+              {workspaceFilesBusy && <p className="muted workspace-empty">Loading files…</p>}
+              {filteredWorkspaceEntries.length > 0 && (
+                <ul className="workspace-files-list" aria-label="Workspace files">
+                  {filteredWorkspaceEntries.map((entry) => (
+                    <li
+                      key={`${entry.type}-${entry.path}`}
+                      draggable={entry.type === 'file'}
+                      onDragStart={(e) => {
+                        if (entry.type !== 'file') return
+                        e.dataTransfer.setData(WORKSPACE_PATH_DRAG_TYPE, entry.path)
+                        e.dataTransfer.setData('text/plain', entry.path)
+                        e.dataTransfer.effectAllowed = 'copy'
+                      }}
+                      title={entry.type === 'file' ? 'Drag to composer to link this file' : undefined}
                     >
-                      {pendingWorkspacePaths.includes(entry.path) ? 'Linked' : 'Link'}
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {workspaceFilesTruncated && (
-            <p className="muted workspace-empty">List truncated. Narrow files or cleanup to see all entries.</p>
+                      <span className="workspace-file-kind" aria-hidden>
+                        {entry.type === 'dir' ? 'D' : 'F'}
+                      </span>
+                      <span className="workspace-file-path" title={entry.path}>
+                        {entry.path}
+                      </span>
+                      {entry.type === 'file' && typeof entry.size === 'number' && (
+                        <span className="workspace-file-size">{formatSize(entry.size)}</span>
+                      )}
+                      {entry.type === 'file' && (
+                        <button
+                          type="button"
+                          className="workspace-link-btn"
+                          onClick={() => addPendingWorkspacePath(entry.path)}
+                          disabled={pendingWorkspacePaths.includes(entry.path)}
+                        >
+                          {pendingWorkspacePaths.includes(entry.path) ? 'Linked' : 'Link'}
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {workspaceFilesTruncated && (
+                <p className="muted workspace-empty">List truncated. Narrow files or cleanup to see all entries.</p>
+              )}
+            </>
           )}
         </div>
 
