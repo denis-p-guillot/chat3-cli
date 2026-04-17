@@ -25,6 +25,7 @@ import {
   serializeChatMessages,
 } from './lib/chatStorage'
 import { streamChat, type ChatMessagePayload } from './lib/streamChat'
+import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import {
   activateWorkspace,
   createWorkspace,
@@ -163,8 +164,10 @@ function AuthPanel({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               required
               minLength={8}
+              maxLength={128}
             />
           </label>
+          {mode === 'register' && <PasswordStrengthMeter password={password} />}
           {mode === 'register' && (
             <label>
               Display name <span className="optional">(optional)</span>

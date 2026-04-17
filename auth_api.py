@@ -44,16 +44,20 @@ def _require_secret_key() -> None:
         )
 
 
+def _truncate_for_bcrypt(password: str) -> str:
+    """Bcrypt hashes at most 72 UTF-8 bytes (not characters)."""
+    raw = password.encode("utf-8")
+    if len(raw) <= 72:
+        return password
+    return raw[:72].decode("utf-8", errors="ignore")
+
+
 def hash_password(password: str) -> str:
-    if len(password) > 72:
-        password = password[:72]
-    return pwd_context.hash(password)
+    return pwd_context.hash(_truncate_for_bcrypt(password))
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    if len(plain) > 72:
-        plain = plain[:72]
-    return pwd_context.verify(plain, hashed)
+    return pwd_context.verify(_truncate_for_bcrypt(plain), hashed)
 
 
 def create_access_token(user_id: int, username: str) -> str:
