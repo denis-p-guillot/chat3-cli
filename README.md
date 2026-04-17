@@ -11,12 +11,40 @@ pip install -r requirements.txt
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
-## Run
+## Run (CLI)
 
 ```bash
 ./go.sh
 # or
 python3 chat3.py
 ```
+
+## Web UI (React)
+
+Development (two terminals):
+
+1. API server (listens on `127.0.0.1:8787`):
+
+   ```bash
+   ./run_api.sh
+   ```
+
+2. Vite dev server (proxies `/api` to the API):
+
+   ```bash
+   cd web && npm install && npm run dev
+   ```
+
+Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The UI streams tool calls and assistant replies over SSE. You can attach files from the composer (text is inlined; other files are sent as base64 for the model to interpret).
+
+Production-style (single process serving API + built static files):
+
+```bash
+cd web && npm run build
+cd ..
+./run_api.sh
+```
+
+With `web/dist` present, `uvicorn` serves the React app at `/` and the API under `/api`.
 
 Runtime data (`history/`, `workspace/`) is created next to the script and is not tracked in git.

@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import zipfile
 from datetime import datetime, timezone
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -1510,7 +1511,7 @@ def call_function(name: str, args: dict[str, Any]) -> str:
     return json_result(ok=False, error=f"Unknown function: {name}")
 
 
-def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
+def iter_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
     input_items: list[Any] = build_input_messages(history)
 
     for _ in range(MAX_TOOL_ROUNDS):
@@ -1528,7 +1529,10 @@ def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
 
         if not tool_calls:
             text = (getattr(response, "output_text", "") or "").strip()
-            return text if text else "_No text response returned._"
+            if not text:
+                text = "_No text response returned._"
+            yield {"type": "assistant", "content": text}
+            return
 
         input_items.extend(response_items)
 
@@ -1536,14 +1540,14 @@ def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
             name = tool_call.name
             args = json.loads(tool_call.arguments)
 
-            render_tool_call(name, args)
+            yield {"type": "tool_call", "name": name, "arguments": args}
 
             try:
                 result = call_function(name, args)
             except Exception as exc:
                 result = json_result(ok=False, error=f"{type(exc).__name__}: {exc}")
 
-            render_tool_result(name, result)
+            yield {"type": "tool_result", "name": name, "output": result}
 
             input_items.append(
                 {
@@ -1553,7 +1557,19 @@ def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
                 }
             )
 
-    return "_Stopped after too many tool rounds._"
+    yield {"type": "assistant", "content": "_Stopped after too many tool rounds._"}
+
+
+def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
+    final = ""
+    for ev in iter_agent_turn(client, history):
+        if ev["type"] == "tool_call":
+            render_tool_call(ev["name"], ev["arguments"])
+        elif ev["type"] == "tool_result":
+            render_tool_result(ev["name"], ev["output"])
+        elif ev["type"] == "assistant":
+            final = ev["content"]
+    return final
 
 
 def main() -> int:
@@ -1617,4 +1633,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    
+
