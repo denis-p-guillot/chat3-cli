@@ -33,6 +33,7 @@ def run_ssh_command(
     password: str | None,
     command: str,
     timeout_seconds: int = 60,
+    get_pty: bool = False,
 ) -> dict[str, Any]:
     """Run a command over SSH with password and/or private key auth."""
     client = paramiko.SSHClient()
@@ -61,7 +62,7 @@ def run_ssh_command(
             allow_agent=False,
         )
 
-        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout, get_pty=bool(get_pty))
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         code = stdout.channel.recv_exit_status()

@@ -40,7 +40,7 @@ import {
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
-import { runDiagnoseError } from './lib/tools'
+import { renderDiagnoseHtmlReport, runDiagnoseErrorStream } from './lib/tools'
 import { ToolboxWidget } from './components/ToolboxWidget'
 import { ConnectivityWidget, type SshFormState } from './components/ConnectivityWidget'
 import { WorkspaceFilesWidget } from './components/WorkspaceFilesWidget'
@@ -478,6 +478,7 @@ function ChatSession({
   const [diagnoseSshConnections, setDiagnoseSshConnections] = useState<string[]>([])
   const [toolboxDragOver, setToolboxDragOver] = useState(false)
   const [notices, setNotices] = useState<Notice[]>([])
+  const [pinnedPathsHydrated, setPinnedPathsHydrated] = useState(false)
 
   const pushNotice = (message: string, tone: NoticeTone = 'info') => {
     const id = uid()
@@ -517,17 +518,19 @@ function ChatSession({
     void refreshSshConnections()
   }, [me.id])
 
-  const refreshWorkspaceFiles = async () => {
+  const refreshWorkspaceFiles = async (): Promise<WorkspaceEntry[]> => {
     setWorkspaceFilesBusy(true)
     setWorkspaceFilesErr(null)
     try {
       const data = await fetchWorkspaceFiles()
       setWorkspaceEntries(data.entries)
       setWorkspaceFilesTruncated(data.truncated)
+      return data.entries
     } catch (e) {
       setWorkspaceEntries([])
       setWorkspaceFilesTruncated(false)
       setWorkspaceFilesErr(e instanceof Error ? e.message : String(e))
+      return []
     } finally {
       setWorkspaceFilesBusy(false)
     }
@@ -538,9 +541,35 @@ function ChatSession({
   }, [me.id, me.active_workspace_id])
 
   useEffect(() => {
-    setPendingWorkspacePaths([])
     setWorkspaceSearch('')
   }, [me.id, me.active_workspace_id])
+
+  useEffect(() => {
+    setPinnedPathsHydrated(false)
+    const key = `pc:pinnedWorkspacePaths:${me.id}`
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) {
+          setPendingWorkspacePaths(parsed.filter((x): x is string => typeof x === 'string'))
+        }
+      }
+    } catch {
+      /* keep current in-memory pins if storage is unavailable */
+    }
+    setPinnedPathsHydrated(true)
+  }, [me.id])
+
+  useEffect(() => {
+    if (!pinnedPathsHydrated) return
+    const key = `pc:pinnedWorkspacePaths:${me.id}`
+    try {
+      window.localStorage.setItem(key, JSON.stringify(pendingWorkspacePaths))
+    } catch {
+      /* ignore local storage write failures */
+    }
+  }, [me.id, pinnedPathsHydrated, pendingWorkspacePaths])
 
   useEffect(() => {
     setHistoryHydrated(false)
@@ -582,13 +611,14 @@ function ChatSession({
     return () => cancelAnimationFrame(id)
   }, [messages, busy, tick])
 
-  const runStream = async (payload: ChatMessagePayload[]) => {
+  const runStream = async (payload: ChatMessagePayload[]): Promise<string> => {
     const ac = new AbortController()
     abortRef.current = ac
     abortReasonRef.current = null
     lastStreamEventAtRef.current = Date.now()
     setBusy(true)
     streamRef.current = { tools: [] }
+    let assistantOutput = ''
     try {
       await streamChat(
         payload,
@@ -629,6 +659,7 @@ function ChatSession({
           })
         }
         if (fin.assistant) {
+          assistantOutput = fin.assistant
           next.push({ id: uid(), role: 'assistant', content: fin.assistant })
         }
         if (fin.error) {
@@ -667,6 +698,7 @@ function ChatSession({
               content: `**Error:** ${fin.error}\n\n_(stopped)_`,
             })
           } else if (fin.assistant) {
+            assistantOutput = fin.assistant
             next.push({
               id: uid(),
               role: 'assistant',
@@ -688,24 +720,25 @@ function ChatSession({
       streamRef.current = { tools: [] }
       setTick((x) => x + 1)
     }
+    return assistantOutput
   }
 
-  const send = async () => {
-    if (!historyHydrated) return
-    const text = input.trim()
+  const send = async (opts?: { text?: string; linkedPaths?: string[] }): Promise<string> => {
+    if (!historyHydrated) return ''
+    const text = (opts?.text ?? input).trim()
     const files = pendingFiles
-    const linkedPaths = pendingWorkspacePaths
-    if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return
+    const linkedPaths = opts?.linkedPaths ?? pendingWorkspacePaths
+    if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return ''
 
     if (files.length > MAX_ATTACHMENTS) {
       pushNotice(`You can attach at most ${MAX_ATTACHMENTS} files.`, 'error')
-      return
+      return ''
     }
     let total = 0
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
         pushNotice(`"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`, 'error')
-        return
+        return ''
       }
       total += f.size
     }
@@ -714,7 +747,7 @@ function ChatSession({
         `Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`,
         'error',
       )
-      return
+      return ''
     }
 
     let uploaded: UploadedWorkspaceFile[] = []
@@ -724,7 +757,7 @@ function ChatSession({
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: `**Error:** ${msg}` }])
-        return
+        return ''
       }
     }
 
@@ -751,9 +784,13 @@ function ChatSession({
         : { role: 'user', content: text },
     ]
 
-    setInput('')
+    if (opts?.text != null) {
+      setInput((prev) => (prev === opts.text ? '' : prev))
+    } else {
+      setInput('')
+    }
     setPendingFiles([])
-    setPendingWorkspacePaths([])
+    // Keep pinned workspace links until the user explicitly unpins them.
     setMessages((m) => [
       ...m,
       {
@@ -768,7 +805,7 @@ function ChatSession({
       void refreshWorkspaceFiles()
     }
 
-    await runStream(payload)
+    return await runStream(payload)
   }
 
   const stop = () => {
@@ -980,13 +1017,74 @@ function ChatSession({
     setDiagnoseErr(null)
     setDiagnoseBusy(true)
     try {
-      const out = await runDiagnoseError(diagnoseContext, diagnoseSshConnections)
+      let liveBlock = '[Diagnose Error Run Stages]\n'
+      let lastStep = ''
+      setInput((prev) => (prev.trim() ? `${prev.trim()}\n\n${liveBlock}` : liveBlock))
+      const out = await runDiagnoseErrorStream(diagnoseContext, diagnoseSshConnections, {
+        onActivity: (step) => {
+          if (step === lastStep) return
+          lastStep = step
+          liveBlock += `- ${step}\n`
+          setInput((prev) => {
+            const marker = '[Diagnose Error Run Stages]'
+            const markerPos = prev.lastIndexOf(marker)
+            if (markerPos < 0) {
+              return prev.trim() ? `${prev.trim()}\n\n${liveBlock}` : liveBlock
+            }
+            const prefix = prev.slice(0, markerPos).trim()
+            return prefix ? `${prefix}\n\n${liveBlock}` : liveBlock
+          })
+        },
+      })
       addPendingWorkspacePath(out.path)
       await refreshWorkspaceFiles()
       setToolboxOpen(false)
       setDiagnoseContext('')
       setDiagnoseSshConnections([])
-      pushNotice(`Report generated: ${out.name}. Linked as ${out.path}.`, 'success')
+      const finalLines: string[] = []
+      if (Array.isArray(out.activity) && out.activity.length > 0) {
+        for (const step of out.activity) finalLines.push(`- ${step}`)
+      }
+      finalLines.push(`- Output artifact prepared: ${out.name}`)
+      finalLines.push(`- Linked workspace artifact: ${out.path}`)
+      const finalBlock = [
+        '[Diagnose Error Run Stages]',
+        ...finalLines,
+        '',
+        'Continue immediately: inspect linked artifacts, summarize the top 5 findings, state the most likely root cause, list recommended next actions, and propose a remediation plan. Do NOT claim files were updated; provide analysis content only. This content will be embedded into the final issue_analysis report.',
+      ].join('\n')
+      setInput((prev) => {
+        const marker = '[Diagnose Error Run Stages]'
+        const markerPos = prev.lastIndexOf(marker)
+        if (markerPos < 0) return prev.trim() ? `${prev.trim()}\n\n${finalBlock}` : finalBlock
+        const prefix = prev.slice(0, markerPos).trim()
+        return prefix ? `${prefix}\n\n${finalBlock}` : finalBlock
+      })
+      pushNotice(`Diagnostics artifact linked: ${out.name}`, 'success')
+      const followupAssistantRaw = await send({ text: finalBlock, linkedPaths: [out.path] })
+      const followupAssistant = followupAssistantRaw
+        .replace(/^done\s*[—-].*$/gim, '')
+        .replace(/^.*updated the final report in:.*$/gim, '')
+        .trim()
+      let htmlPathCandidate = out.path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
+      try {
+        const html = await renderDiagnoseHtmlReport(undefined, undefined, undefined, followupAssistant)
+        htmlPathCandidate = html.path
+        pushNotice(`Final HTML report generated: ${html.name}`, 'success')
+      } catch (err) {
+        pushNotice(`Final HTML report generation failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
+      }
+      const entries = await refreshWorkspaceFiles()
+      const hasHtml = entries.some((e) => e.type === 'file' && e.path === htmlPathCandidate)
+      setPendingWorkspacePaths((prev) => {
+        const next = [...prev]
+        if (!next.includes(out.path)) next.push(out.path)
+        if (hasHtml && !next.includes(htmlPathCandidate)) next.push(htmlPathCandidate)
+        return next
+      })
+      if (!hasHtml) {
+        pushNotice('Final HTML report file not found in workspace after generation.', 'error')
+      }
     } catch (err) {
       setDiagnoseErr(err instanceof Error ? err.message : String(err))
     } finally {

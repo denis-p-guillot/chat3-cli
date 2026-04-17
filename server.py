@@ -9,8 +9,9 @@ import os
 import queue
 import re
 import secrets
+import shlex
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -328,8 +329,14 @@ async def chat_stream(
                 q.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
+        heartbeat_step = "Diagnosis still running: collecting remote diagnostics..."
         while True:
-            chunk = await asyncio.to_thread(q.get)
+            try:
+                chunk = await asyncio.to_thread(q.get, True, 2.0)
+            except queue.Empty:
+                hb = {"type": "activity", "step": heartbeat_step}
+                yield f"data: {json.dumps(hb, ensure_ascii=False)}\n\n".encode("utf-8")
+                continue
             if chunk is None:
                 break
             yield chunk
@@ -455,6 +462,14 @@ class SshConnectionIn(BaseModel):
 class DiagnoseErrorBody(BaseModel):
     context: str = Field(default="", max_length=200_000)
     ssh_connections: list[str] = Field(default_factory=list, max_length=50)
+    generate_report: bool = True
+
+
+class DiagnoseRenderReportBody(BaseModel):
+    context: str = Field(default="", max_length=200_000)
+    ssh_connections_data: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    activity: list[str] = Field(default_factory=list, max_length=5000)
+    assistant_summary: str = Field(default="", max_length=500_000)
 
 
 def _render_issue_analysis_html(
@@ -462,6 +477,8 @@ def _render_issue_analysis_html(
     user_id: int,
     workspace_id: int,
     ssh_connections: list[dict[str, Any]],
+    activity: list[str],
+    assistant_summary: str = "",
 ) -> str:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     safe_context = html.escape(context.strip() or "(No context provided)")
@@ -486,6 +503,56 @@ def _render_issue_analysis_html(
     </section>
 """
     )
+    grouped_activity: list[tuple[str, list[str]]] = [
+        ("Setup", []),
+        ("Connection Prep", []),
+        ("Diagnostics Collection", []),
+        ("Downloads", []),
+        ("Analysis", []),
+        ("Report", []),
+        ("Other", []),
+    ]
+    for step in activity:
+        s = step.lower()
+        idx = 6
+        if "starting diagnosis run" in s:
+            idx = 0
+        elif "using ssh connection" in s or "skipped ssh connection" in s or "credential decryption failed" in s:
+            idx = 1
+        elif "collecting remote diagnostics" in s or "saved base diagnostic artifacts" in s:
+            idx = 2
+        elif "downloading " in s or "saved downloaded " in s:
+            idx = 3
+        elif "analyzing downloaded files" in s or "re-analyzed downloaded logs" in s:
+            idx = 4
+        elif "report generated" in s:
+            idx = 5
+        grouped_activity[idx][1].append(step)
+
+    analysis_flow_items_parts: list[str] = []
+    for group_name, steps in grouped_activity:
+        if not steps:
+            continue
+        items = "".join(f"<li>{html.escape(item)}</li>" for item in steps)
+        analysis_flow_items_parts.append(
+            f"<li><strong>{html.escape(group_name)}</strong><ol>{items}</ol></li>"
+        )
+    analysis_flow_items = "".join(analysis_flow_items_parts) or "<li>No activity captured.</li>"
+    analysis_flow_section = f"""
+    <section class="section">
+      <h2>Full Analysis Flow</h2>
+      <p>Complete execution stages grouped by phase (chronological order preserved inside each phase):</p>
+      <ol>{analysis_flow_items}</ol>
+    </section>
+"""
+
+    def _collapsed_sample(title: str, content: str) -> str:
+        return (
+            f"<details><summary>{html.escape(title)} (click to expand)</summary>"
+            f"<pre>{html.escape(content)}</pre>"
+            "</details>"
+        )
+
     remote_cards = "".join(
         f"""
     <section class="section">
@@ -494,22 +561,23 @@ def _render_issue_analysis_html(
       <p><strong>Status:</strong> {html.escape(str(c.get('status', 'unknown')))}</p>
       <h3>Findings</h3>
       <ul>{"".join(f"<li>{html.escape(x)}</li>" for x in c.get('findings', [])) or "<li>No automatic findings.</li>"}</ul>
-      <h3>Nginx logs</h3>
-      <pre>{html.escape(str(c.get('nginx_logs', '(no data)')))}</pre>
-      <h3>Odoo logs</h3>
-      <pre>{html.escape(str(c.get('odoo_logs', '(no data)')))}</pre>
-      <h3>PostgreSQL logs</h3>
-      <pre>{html.escape(str(c.get('postgres_logs', '(no data)')))}</pre>
-      <h3>pg_stat_statements</h3>
-      <pre>{html.escape(str(c.get('pg_stat_statements', '(no data)')))}</pre>
-      <h3>Odoo addons inventory</h3>
-      <pre>{html.escape(str(c.get('odoo_addons', '(no data)')))}</pre>
-      <h3>Remote files inventory</h3>
-      <pre>{html.escape(str(c.get('remote_files', '(no data)')))}</pre>
+      <h3>Log samples</h3>
+      {_collapsed_sample("Nginx logs", str(c.get('nginx_logs', '(no data)')))}
+      {_collapsed_sample("Odoo logs", str(c.get('odoo_logs', '(no data)')))}
+      {_collapsed_sample("PostgreSQL logs", str(c.get('postgres_logs', '(no data)')))}
+      {_collapsed_sample("pg_stat_statements", str(c.get('pg_stat_statements', '(no data)')))}
+      {_collapsed_sample("Odoo addons inventory", str(c.get('odoo_addons', '(no data)')))}
+      {_collapsed_sample("Custom addons selected", str("\\n".join(c.get('custom_addons_selected', [])) if c.get('custom_addons_selected') else '(none)'))}
+      <h3>Code-centric analysis</h3>
+      <ul>{"".join(f"<li>{html.escape(x)}</li>" for x in c.get('code_findings', [])) or "<li>No code analysis findings.</li>"}</ul>
+      <h3>Code/log correlation</h3>
+      <ul>{"".join(f"<li>{html.escape(x)}</li>" for x in c.get('code_log_correlation', [])) or "<li>No correlation notes.</li>"}</ul>
+      {_collapsed_sample("Custom addons code bundle", str(c.get('custom_addons_code_bundle', '(no data)')))}
+      {_collapsed_sample("Remote files inventory", str(c.get('remote_files', '(no data)')))}
       <h3>Downloaded artifacts (workspace paths)</h3>
       <pre>{html.escape(str("\n".join(c.get('artifact_paths', [])) if c.get('artifact_paths') else '(none)'))}</pre>
-      <h3>Raw SSH Output (debug)</h3>
-      <pre>{html.escape(str(c.get('raw_output', '(no output)')))}</pre>
+      <h3>Debug samples</h3>
+      {_collapsed_sample("Raw SSH output", str(c.get('raw_output', '(no output)')))}
     </section>
 """
         for c in ssh_connections
@@ -520,6 +588,14 @@ def _render_issue_analysis_html(
     <section class="section">
       <h2>Remote Diagnostics</h2>
       <p>No remote diagnostics were executed in this run.</p>
+    </section>
+"""
+    assistant_section = ""
+    if assistant_summary.strip():
+        assistant_section = f"""
+    <section class="section">
+      <h2>AI Follow-up Conclusions</h2>
+      <pre>{html.escape(assistant_summary.strip())}</pre>
     </section>
 """
     return f"""<!DOCTYPE html>
@@ -553,6 +629,9 @@ def _render_issue_analysis_html(
     .footer {{ margin-top:20px; color:#a997ca; font-size:.88rem; text-align:center; border-top:1px solid rgba(184,169,214,.15); padding-top:14px; }}
     a {{ color:#c4b5fd; text-decoration:none; }}
     a:hover {{ text-decoration:underline; }}
+    details {{ margin:10px 0; border:1px solid rgba(184,169,214,.18); border-radius:10px; background:#120d1f; }}
+    summary {{ cursor:pointer; padding:10px 12px; color:#d8c9f8; font-weight:600; }}
+    details pre {{ margin:0 12px 12px; }}
   </style>
 </head>
 <body>
@@ -576,10 +655,18 @@ def _render_issue_analysis_html(
       </ul>
     </section>
 {ssh_section}
+{analysis_flow_section}
 {remote_cards}
+{assistant_section}
     <section class="section">
-      <h2>Next Actions</h2>
-      <p>Use this report as the baseline artifact. Add concrete findings, stack traces, and patch recommendations.</p>
+      <h2>Standardized Next Actions</h2>
+      <p>Use this fixed output contract for every diagnosis report:</p>
+      <ol>
+        <li><strong>Concrete Findings</strong>: 5 concise findings with direct evidence references (logs/code/artifacts).</li>
+        <li><strong>Likely Root Cause</strong>: primary hypothesis, confidence level, and assumptions.</li>
+        <li><strong>Recommended Next Actions</strong>: immediate validation and containment actions.</li>
+        <li><strong>Remediation Plan</strong>: prioritized implementation steps (P0/P1/P2), owner suggestions, and rollback notes.</li>
+      </ol>
     </section>
     <div class="footer">
       Generated at {now} · Styled for PurpleCloud<br/>
@@ -589,6 +676,29 @@ def _render_issue_analysis_html(
 </body>
 </html>
 """
+
+
+def _write_issue_analysis_report(
+    context: str,
+    user_id: int,
+    ws_id: int,
+    attached: list[dict[str, Any]],
+    activity: list[str],
+    assistant_summary: str = "",
+) -> dict[str, Any]:
+    root = ensure_named_workspace_layout(user_id, ws_id)
+    out_path = root / "issue_analysis.html"
+    report_activity = [*activity, "Report generated."]
+    out_path.write_text(
+        _render_issue_analysis_html(context, user_id, ws_id, attached, report_activity, assistant_summary),
+        encoding="utf-8",
+    )
+    rel = f"users/{user_id}/w/{ws_id}/issue_analysis.html"
+    return {"path": rel, "name": "issue_analysis.html", "activity": report_activity}
+
+
+def _diagnose_state_path(user_id: int, ws_id: int) -> Path:
+    return ensure_named_workspace_layout(user_id, ws_id) / "diagnose_state.json"
 
 
 def _extract_tagged(body: str, tag: str) -> str:
@@ -679,16 +789,35 @@ def _analyze_remote_text(nginx_logs: str, odoo_logs: str, pg_logs: str, pg_stats
     return findings
 
 
-def _collect_remote_diagnostics(row: SshConnectionRow, key: str | None, password: str | None) -> dict[str, Any]:
+def _collect_remote_diagnostics(
+    row: SshConnectionRow,
+    key: str | None,
+    password: str | None,
+    emit_activity: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    def emit(step: str) -> None:
+        if emit_activity is not None:
+            emit_activity(step)
+
+    emit(f"[Action] Starting remote diagnostics script on '{row.name}'.")
+    sudo_env_prefix = ""
+    if password:
+        sudo_env_prefix = f"PC_SUDO_PASS={shlex.quote(password)}; export PC_SUDO_PASS; "
     script = r"""
 set +e
 SUDO=""
 if sudo -n true >/dev/null 2>&1; then
   SUDO="sudo -n"
+elif [ -n "$PC_SUDO_PASS" ] && printf '%s\n' "$PC_SUDO_PASS" | sudo -S -p '' true >/dev/null 2>&1; then
+  SUDO="sudo -S -p ''"
 fi
 run_cmd() {
   if [ -n "$SUDO" ]; then
-    $SUDO sh -lc "$1" 2>/dev/null || true
+    if [ "$SUDO" = "sudo -S -p ''" ]; then
+      printf '%s\n' "$PC_SUDO_PASS" | sudo -S -p '' sh -lc "$1" 2>/dev/null || true
+    else
+      $SUDO sh -lc "$1" 2>/dev/null || true
+    fi
   else
     sh -lc "$1" 2>/dev/null || true
   fi
@@ -824,9 +953,9 @@ printf "%s\n" "$ODOO_ADDONS_OUT"
 echo "===END_ODOO_ADDONS==="
 
 echo "===BEGIN_REMOTE_FILES==="
-REMOTE_FILES_OUT="$(run_cmd "echo '## NGINX LOG FILES'; ls -1 /var/log/nginx 2>/dev/null | head -n 200; \
-echo; echo '## ODOO LOG FILES'; ls -1 /var/log/odoo 2>/dev/null | head -n 200; \
-echo; echo '## POSTGRES LOG FILES'; ls -1 /var/log/postgresql 2>/dev/null | head -n 200; \
+REMOTE_FILES_OUT="$(run_cmd "echo '## NGINX LOG FILES'; ls -1 /var/log/nginx/*.log /var/log/nginx/*odoo*.log 2>/dev/null | head -n 200; \
+echo; echo '## ODOO LOG FILES'; ls -1 /var/log/odoo/*.log /var/log/odoo.log /opt/odoo/log/*.log 2>/dev/null | head -n 200; \
+echo; echo '## POSTGRES LOG FILES'; ls -1 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null | head -n 200; \
 echo; echo '## COMMON ODOO ADDONS PATHS'; ls -1 /odoo/addons /opt/odoo/addons /mnt/extra-addons 2>/dev/null | head -n 200")"
 printf "%s\n" "$REMOTE_FILES_OUT"
 echo "===END_REMOTE_FILES==="
@@ -838,10 +967,13 @@ echo "===END_REMOTE_FILES==="
         auth_mode=row.auth_mode,
         private_key=key,
         password=password,
-        command=script,
+        command=f"{sudo_env_prefix}{script}",
         timeout_seconds=120,
+        get_pty=True,
     )
+    emit(f"[Step] Remote diagnostics script finished on '{row.name}' (return code: {res.get('returncode')}).")
     body = (res.get("stdout", "") or "") + ("\n" + res.get("stderr", "") if res.get("stderr") else "")
+    emit(f"[Search] Parsing diagnostics sections for '{row.name}' (nginx, odoo, postgres, pg_stat_statements, inventory).")
     nginx_logs = _extract_tagged(body, "NGINX")
     odoo_logs = _extract_tagged(body, "ODOO")
     postgres_logs = _extract_tagged(body, "PGLOG")
@@ -851,7 +983,9 @@ echo "===END_REMOTE_FILES==="
     raw_output = body.strip() or "(no output)"
     if len(raw_output) > 6000:
         raw_output = raw_output[:6000] + "\n\n...[truncated]..."
+    emit(f"[Analysis] Running initial error/performance analysis for '{row.name}'.")
     findings = _analyze_remote_text(nginx_logs, odoo_logs, postgres_logs, pg_stats)
+    emit(f"[Reasoning] Initial analysis produced {len(findings)} finding(s) for '{row.name}'.")
     remote_log_names = re.findall(r"(?im)^(?:.*\.)?(?:log|log\.\d+|log\.\d+\.gz)$", remote_files)
     if (
         any(x and "-- no entries --" in x.lower() for x in (nginx_logs, odoo_logs, postgres_logs))
@@ -868,6 +1002,7 @@ echo "===END_REMOTE_FILES==="
         )
     if res.get("stderr"):
         findings.append("SSH command produced stderr output (see raw output section).")
+    emit(f"[Step] Diagnostics extraction complete for '{row.name}'.")
     return {
         "diagnostics": True,
         "status": "ok" if res.get("ok") else "warning",
@@ -881,6 +1016,222 @@ echo "===END_REMOTE_FILES==="
         "findings": findings,
         "returncode": res.get("returncode"),
     }
+
+
+def _extract_remote_log_paths(remote_files: str) -> dict[str, list[str]]:
+    buckets: dict[str, list[str]] = {"nginx": [], "odoo": [], "postgres": []}
+    current: str | None = None
+    for raw in remote_files.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        upper = line.upper()
+        if upper.startswith("## NGINX LOG FILES"):
+            current = "nginx"
+            continue
+        if upper.startswith("## ODOO LOG FILES"):
+            current = "odoo"
+            continue
+        if upper.startswith("## POSTGRES LOG FILES"):
+            current = "postgres"
+            continue
+        if upper.startswith("## "):
+            current = None
+            continue
+        if current is None:
+            continue
+        if ".log" not in line.lower():
+            continue
+        path = line
+        if not path.startswith("/"):
+            base = {
+                "nginx": "/var/log/nginx",
+                "odoo": "/var/log/odoo",
+                "postgres": "/var/log/postgresql",
+            }[current]
+            path = f"{base}/{path}"
+        if path not in buckets[current]:
+            buckets[current].append(path)
+    return buckets
+
+
+def _fetch_remote_log_tail(
+    row: SshConnectionRow,
+    key: str | None,
+    password: str | None,
+    remote_path: str,
+    lines: int = 2000,
+) -> str:
+    qpath = shlex.quote(remote_path)
+    sudo_env_prefix = ""
+    if password:
+        sudo_env_prefix = f"PC_SUDO_PASS={shlex.quote(password)}; export PC_SUDO_PASS; "
+    cmd = (
+        "set +e; "
+        f"P={qpath}; "
+        f"if [ -r \"$P\" ]; then tail -n {int(lines)} \"$P\"; "
+        f"elif sudo -n test -r \"$P\" >/dev/null 2>&1; then sudo -n tail -n {int(lines)} \"$P\"; "
+        "elif [ -n \"$PC_SUDO_PASS\" ] && printf '%s\\n' \"$PC_SUDO_PASS\" | sudo -S -p '' test -r \"$P\" >/dev/null 2>&1; "
+        f"then printf '%s\\n' \"$PC_SUDO_PASS\" | sudo -S -p '' tail -n {int(lines)} \"$P\"; "
+        "else echo \"(unreadable) $P\"; fi"
+    )
+    res = run_ssh_command(
+        host=row.host,
+        port=row.port,
+        username=row.username,
+        auth_mode=row.auth_mode,
+        private_key=key,
+        password=password,
+        command=f"{sudo_env_prefix}{cmd}",
+        timeout_seconds=120,
+        get_pty=True,
+    )
+    out = (res.get("stdout", "") or "").strip()
+    err = (res.get("stderr", "") or "").strip()
+    if out:
+        return out
+    if err:
+        return f"(stderr)\n{err}"
+    return "(no output)"
+
+
+def _extract_odoo_addon_candidates(odoo_addons: str) -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    current_path: str | None = None
+    for raw in odoo_addons.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("## ADDONS PATH:"):
+            current_path = line.split(":", 1)[1].strip()
+            continue
+        if current_path is None:
+            continue
+        if line.startswith("("):
+            continue
+        # Keep module-like names only.
+        if not re.match(r"^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$", line):
+            continue
+        out.append((current_path, line))
+    return out
+
+
+def _score_custom_addon(path: str, module: str) -> int:
+    score = 0
+    p = path.lower()
+    m = module.lower()
+    for token in ("extra", "custom", "private", "client", "enterprise", "addons_custom"):
+        if token in p:
+            score += 4
+    for token in ("custom", "pci", "pc_", "client", "purple", "cloud"):
+        if token in m:
+            score += 3
+    for core in ("base", "web", "mail", "sale", "stock", "account", "hr", "purchase"):
+        if m == core or m.startswith(f"{core}_"):
+            score -= 3
+    return score
+
+
+def _fetch_remote_addon_code_bundle(
+    row: SshConnectionRow,
+    key: str | None,
+    password: str | None,
+    addon_abs_path: str,
+) -> str:
+    qpath = shlex.quote(addon_abs_path)
+    sudo_env_prefix = ""
+    if password:
+        sudo_env_prefix = f"PC_SUDO_PASS={shlex.quote(password)}; export PC_SUDO_PASS; "
+    # Build a bounded textual bundle to keep API payload safe.
+    cmd = (
+        "set +e; "
+        f"P={qpath}; "
+        "if [ ! -d \"$P\" ]; then echo \"(missing addon path) $P\"; exit 0; fi; "
+        "run_cmd(){ "
+        "if [ -r \"$1\" ]; then sh -lc \"$2\"; "
+        "elif sudo -n test -r \"$1\" >/dev/null 2>&1; then sudo -n sh -lc \"$2\"; "
+        "elif [ -n \"$PC_SUDO_PASS\" ] && printf '%s\\n' \"$PC_SUDO_PASS\" | sudo -S -p '' test -r \"$1\" >/dev/null 2>&1; "
+        "then printf '%s\\n' \"$PC_SUDO_PASS\" | sudo -S -p '' sh -lc \"$2\"; "
+        "else echo \"(unreadable) $1\"; fi; }; "
+        "echo \"# ADDON: $P\"; "
+        "echo \"## FILE INVENTORY\"; "
+        "find \"$P\" -maxdepth 3 -type f "
+        "\\( -name '__manifest__.py' -o -name '__init__.py' -o -name '*.py' -o -name '*.xml' -o -name '*.csv' -o -name '*.js' \\) "
+        "| head -n 60; "
+        "for f in "
+        "\"$P/__manifest__.py\" "
+        "\"$P/models/__init__.py\" "
+        "\"$P/models\"/*.py "
+        "\"$P/controllers\"/*.py "
+        "\"$P/security/ir.model.access.csv\" "
+        "\"$P/views\"/*.xml "
+        "; do "
+        "[ -e \"$f\" ] || continue; "
+        "echo; echo \"## FILE: $f\"; "
+        "run_cmd \"$f\" \"sed -n '1,220p' '$f'\"; "
+        "done"
+    )
+    res = run_ssh_command(
+        host=row.host,
+        port=row.port,
+        username=row.username,
+        auth_mode=row.auth_mode,
+        private_key=key,
+        password=password,
+        command=f"{sudo_env_prefix}{cmd}",
+        timeout_seconds=120,
+        get_pty=True,
+    )
+    out = (res.get("stdout", "") or "").strip()
+    err = (res.get("stderr", "") or "").strip()
+    body = out if out else ""
+    if err:
+        body = f"{body}\n\n(stderr)\n{err}".strip()
+    if not body:
+        body = "(no output)"
+    if len(body) > 220_000:
+        body = body[:220_000] + "\n\n...[truncated]..."
+    return body
+
+
+def _analyze_addon_code_with_logs(code_text: str, log_findings: list[str]) -> tuple[list[str], list[str]]:
+    code_findings: list[str] = []
+    correlations: list[str] = []
+
+    def _count(pat: str) -> int:
+        return len(re.findall(pat, code_text, flags=re.I))
+
+    sql_exec = _count(r"\b(cr|self\.env\.cr)\.(execute|executemany)\(")
+    if sql_exec:
+        code_findings.append(f"Code uses raw SQL execution {sql_exec} time(s); review indexing/query plans for slow SQL findings.")
+    loops = _count(r"\bfor\s+\w+\s+in\s+.*:\s*(?:\n|\r\n)\s+.*\.(search|write|create)\(")
+    if loops:
+        code_findings.append(f"Potential ORM-in-loop pattern appears {loops} time(s); may contribute to Odoo latency.")
+    no_limit = _count(r"\.search\(\s*\[.*\]\s*\)")
+    if no_limit:
+        code_findings.append(f"Unbounded ORM searches detected {no_limit} time(s) in sampled code.")
+    http_routes = _count(r"@http\.route")
+    if http_routes:
+        code_findings.append(f"HTTP controllers detected ({http_routes} route decorators); correlate with nginx/timeout findings.")
+    sudo_calls = _count(r"\.sudo\(")
+    if sudo_calls:
+        code_findings.append(f"Frequent sudo() usage detected ({sudo_calls}); review security and heavy-path queries.")
+
+    findings_text = " ".join(log_findings).lower()
+    if "slow request" in findings_text or "upstream latency" in findings_text:
+        if http_routes:
+            correlations.append("Nginx latency findings align with custom HTTP route handlers found in addon code.")
+    if "postgresql logs show" in findings_text or "pg_stat_statements" in findings_text:
+        if sql_exec or no_limit:
+            correlations.append("PostgreSQL performance findings align with raw SQL/unbounded ORM usage in custom addons.")
+    if "odoo logs include" in findings_text and (loops or no_limit):
+        correlations.append("Odoo slow/timeout indicators align with potentially heavy ORM loop/search patterns.")
+
+    if not code_findings:
+        code_findings.append("No obvious high-risk code patterns found in sampled custom addon snippets.")
+    if not correlations:
+        correlations.append("No strong direct code-to-log correlation found in sampled addon snippets.")
+    return code_findings, correlations
 
 
 def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
@@ -975,14 +1326,22 @@ def ssh_connections_test(connection_id: int, user: UserRow = Depends(get_current
     }
 
 
-@app.post("/api/tools/diagnose-error")
-def tools_diagnose_error(
+def _run_diagnose_error(
     body: DiagnoseErrorBody,
-    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+    user: UserRow,
+    ws_id: int,
+    emit_activity: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    user, ws_id, _ws = ctx
     attached: list[dict[str, Any]] = []
+    activity: list[str] = []
     seen: set[str] = set()
+
+    def push_activity(step: str) -> None:
+        activity.append(step)
+        if emit_activity is not None:
+            emit_activity(step)
+
+    push_activity("Starting diagnosis run.")
     for name in body.ssh_connections:
         clean = name.strip()
         if not clean or clean in seen:
@@ -990,7 +1349,9 @@ def tools_diagnose_error(
         seen.add(clean)
         row = next((r for r in list_ssh_connections(user.id) if r.name == clean), None)
         if row is None:
+            push_activity(f"Skipped SSH connection '{clean}' (not found).")
             continue
+        push_activity(f"Using SSH connection '{row.name}' ({row.username}@{row.host}:{row.port}).")
         info: dict[str, Any] = {
             "name": row.name,
             "host": row.host,
@@ -1014,8 +1375,10 @@ def tools_diagnose_error(
             info["postgres_logs"] = "(credential decryption failed)"
             info["pg_stat_statements"] = "(credential decryption failed)"
             attached.append(info)
+            push_activity(f"Credential decryption failed for '{row.name}'.")
             continue
-        info.update(_collect_remote_diagnostics(row, key, password))
+        push_activity(f"Collecting remote diagnostics for '{row.name}'.")
+        info.update(_collect_remote_diagnostics(row, key, password, emit_activity=push_activity))
         if info.get("diagnostics"):
             root = ensure_named_workspace_layout(user.id, ws_id)
             artifacts_dir = root / "diagnostics" / re.sub(r"[^a-zA-Z0-9._-]+", "_", row.name.strip() or "connection")
@@ -1026,6 +1389,10 @@ def tools_diagnose_error(
                 "postgres_logs.txt": str(info.get("postgres_logs", "")),
                 "pg_stat_statements.txt": str(info.get("pg_stat_statements", "")),
                 "odoo_addons.txt": str(info.get("odoo_addons", "")),
+                "custom_addons_selected.txt": "\n".join(info.get("custom_addons_selected", []) or []),
+                "custom_addons_code_bundle.txt": str(info.get("custom_addons_code_bundle", "")),
+                "code_findings.txt": "\n".join(info.get("code_findings", []) or []),
+                "code_log_correlation.txt": "\n".join(info.get("code_log_correlation", []) or []),
                 "remote_files_inventory.txt": str(info.get("remote_files", "")),
                 "raw_output.txt": str(info.get("raw_output", "")),
             }
@@ -1036,16 +1403,237 @@ def tools_diagnose_error(
                 artifact_paths.append(
                     f"users/{user.id}/w/{ws_id}/diagnostics/{artifacts_dir.name}/{name}"
                 )
+            push_activity(f"Saved base diagnostic artifacts for '{row.name}'.")
+
+            # Pull remote log files into workspace over SSH, then analyze those local copies.
+            discovered = _extract_remote_log_paths(str(info.get("remote_files", "")))
+            push_activity(
+                f"[Search] Found remote log candidates for '{row.name}': "
+                f"nginx={len(discovered['nginx'])}, odoo={len(discovered['odoo'])}, postgres={len(discovered['postgres'])}."
+            )
+            downloaded_by_kind: dict[str, list[str]] = {"nginx": [], "odoo": [], "postgres": []}
+            for kind, paths in discovered.items():
+                picked = paths[:4]
+                if picked:
+                    push_activity(f"Downloading {kind} logs for '{row.name}' ({len(picked)} files).")
+                for idx, remote_path in enumerate(picked, start=1):
+                    push_activity(
+                        f"Downloading {kind} log {idx}/{len(picked)} for '{row.name}': {remote_path}"
+                    )
+                    payload = _fetch_remote_log_tail(row, key, password, remote_path, lines=2000)
+                    safe_base = re.sub(r"[^a-zA-Z0-9._-]+", "_", Path(remote_path).name or f"{kind}_{idx}.log")
+                    local_name = f"remote_{kind}_{idx}_{safe_base}.txt"
+                    lp = artifacts_dir / local_name
+                    lp.write_text(payload, encoding="utf-8")
+                    rel_local = f"users/{user.id}/w/{ws_id}/diagnostics/{artifacts_dir.name}/{local_name}"
+                    artifact_paths.append(rel_local)
+                    downloaded_by_kind[kind].append(payload)
+                    push_activity(
+                        f"[Download] Saved downloaded {kind} log for '{row.name}' as '{local_name}' "
+                        f"({len(payload.encode('utf-8'))} bytes)."
+                    )
+            if any(downloaded_by_kind.values()):
+                nginx_text = "\n\n".join(downloaded_by_kind["nginx"]).strip() or str(info.get("nginx_logs", ""))
+                odoo_text = "\n\n".join(downloaded_by_kind["odoo"]).strip() or str(info.get("odoo_logs", ""))
+                pg_text = "\n\n".join(downloaded_by_kind["postgres"]).strip() or str(info.get("postgres_logs", ""))
+                info["nginx_logs"] = nginx_text
+                info["odoo_logs"] = odoo_text
+                info["postgres_logs"] = pg_text
+                push_activity(f"Analyzing downloaded files for '{row.name}' (error checks).")
+                push_activity(f"Analyzing downloaded files for '{row.name}' (performance checks).")
+                info["findings"] = _analyze_remote_text(
+                    nginx_text,
+                    odoo_text,
+                    pg_text,
+                    str(info.get("pg_stat_statements", "")),
+                )
+                push_activity(
+                    f"[Reasoning] Post-download analysis for '{row.name}' produced "
+                    f"{len(info['findings'])} finding(s)."
+                )
+                for finding in info["findings"][:8]:
+                    push_activity(f"[Reasoning] {finding}")
+                push_activity(f"Re-analyzed downloaded logs for '{row.name}' (error + performance checks).")
+            else:
+                push_activity(
+                    f"No downloadable logs found for '{row.name}'; using base diagnostics for analysis."
+                )
+
+            addon_candidates = _extract_odoo_addon_candidates(str(info.get("odoo_addons", "")))
+            ranked = sorted(addon_candidates, key=lambda x: _score_custom_addon(x[0], x[1]), reverse=True)
+            selected = [x for x in ranked if _score_custom_addon(x[0], x[1]) > 0][:5]
+            if not selected:
+                selected = ranked[:3]
+            selected_labels = [f"{p}/{m}" for p, m in selected]
+            info["custom_addons_selected"] = selected_labels
+            if selected:
+                push_activity(
+                    f"[Search] Selected {len(selected)} custom addon(s) for code-centric diagnostics on '{row.name}'."
+                )
+                bundles: list[str] = []
+                for path, module in selected:
+                    addon_path = f"{path.rstrip('/')}/{module}"
+                    push_activity(f"[Download] Fetching addon source snapshot: {addon_path}")
+                    bundle = _fetch_remote_addon_code_bundle(row, key, password, addon_path)
+                    bundles.append(bundle)
+                code_bundle = "\n\n".join(bundles).strip()
+                info["custom_addons_code_bundle"] = code_bundle
+                push_activity(f"[Analysis] Running code-centric analysis for '{row.name}'.")
+                code_findings, code_corr = _analyze_addon_code_with_logs(code_bundle, list(info.get("findings", [])))
+                info["code_findings"] = code_findings
+                info["code_log_correlation"] = code_corr
+                for item in code_findings[:6]:
+                    push_activity(f"[Reasoning][Code] {item}")
+                for item in code_corr[:6]:
+                    push_activity(f"[Reasoning][Correlation] {item}")
+            else:
+                info["custom_addons_code_bundle"] = "(no custom addons candidates found)"
+                info["code_findings"] = ["No custom addons discovered from remote inventory."]
+                info["code_log_correlation"] = ["Code/log correlation skipped because no addons were selected."]
+                push_activity(f"[Search] No custom addon candidates found for '{row.name}'.")
             info["artifact_paths"] = artifact_paths
         attached.append(info)
+    if body.generate_report:
+        push_activity("Compiling final report with all collected diagnostics, downloads, and analysis.")
+        rendered = _write_issue_analysis_report(body.context, user.id, ws_id, attached, activity)
+        activity = list(rendered["activity"])
+        if emit_activity is not None:
+            emit_activity("Report generated.")
+        return {
+            "status": "ok",
+            "path": rendered["path"],
+            "name": rendered["name"],
+            "ssh_connections": attached,
+            "activity": activity,
+        }
+
+    push_activity("Deferring final report generation until after prompt execution.")
     root = ensure_named_workspace_layout(user.id, ws_id)
-    out_path = root / "issue_analysis.html"
-    out_path.write_text(
-        _render_issue_analysis_html(body.context, user.id, ws_id, attached),
+    summary_path = root / "diagnostics_summary.md"
+    lines: list[str] = [
+        "# Diagnose Error Summary",
+        "",
+        "Final HTML report generation is deferred for interactive prompt execution.",
+        "",
+        "## Activity",
+    ]
+    lines.extend([f"- {x}" for x in activity])
+    lines.append("")
+    lines.append("## Connection Findings")
+    for c in attached:
+        lines.append(f"### {c.get('name', 'unknown')}")
+        findings = c.get("findings", []) or []
+        if findings:
+            lines.extend([f"- {f}" for f in findings[:12]])
+        else:
+            lines.append("- No findings.")
+        lines.append("")
+    summary_path.write_text("\n".join(lines), encoding="utf-8")
+    _diagnose_state_path(user.id, ws_id).write_text(
+        json.dumps(
+            {
+                "context": body.context,
+                "ssh_connections_data": attached,
+                "activity": activity,
+            },
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
-    rel = f"users/{user.id}/w/{ws_id}/issue_analysis.html"
-    return {"status": "ok", "path": rel, "name": "issue_analysis.html", "ssh_connections": attached}
+    rel = f"users/{user.id}/w/{ws_id}/diagnostics_summary.md"
+    return {"status": "ok", "path": rel, "name": "diagnostics_summary.md", "ssh_connections": attached, "activity": activity}
+
+
+@app.post("/api/tools/diagnose-error")
+def tools_diagnose_error(
+    body: DiagnoseErrorBody,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    return _run_diagnose_error(body, user, ws_id)
+
+
+@app.post("/api/tools/diagnose-error/render-report")
+def tools_diagnose_error_render_report(
+    body: DiagnoseRenderReportBody,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    context = body.context
+    attached = list(body.ssh_connections_data)
+    activity = list(body.activity)
+    if not attached or not activity:
+        state_path = _diagnose_state_path(user.id, ws_id)
+        if not state_path.exists():
+            raise HTTPException(status_code=400, detail="No saved diagnose state found for this workspace.")
+        try:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Could not read saved diagnose state: {exc}") from exc
+        if not isinstance(saved, dict):
+            raise HTTPException(status_code=500, detail="Saved diagnose state is invalid.")
+        context = str(saved.get("context", context))
+        attached = list(saved.get("ssh_connections_data", attached) or [])
+        activity = list(saved.get("activity", activity) or [])
+        if not attached and not activity:
+            raise HTTPException(status_code=400, detail="Saved diagnose state is empty.")
+
+    rendered = _write_issue_analysis_report(
+        context,
+        user.id,
+        ws_id,
+        attached,
+        activity,
+        body.assistant_summary,
+    )
+    return {"status": "ok", "path": rendered["path"], "name": rendered["name"], "activity": rendered["activity"]}
+
+
+@app.post("/api/tools/diagnose-error/stream")
+async def tools_diagnose_error_stream(
+    body: DiagnoseErrorBody,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> StreamingResponse:
+    user, ws_id, _ws = ctx
+    # Hard guard: interactive stream mode never generates the final HTML report.
+    body.generate_report = False
+
+    async def event_stream() -> AsyncIterator[bytes]:
+        q: queue.Queue[bytes | None] = queue.Queue()
+
+        def worker() -> None:
+            try:
+                def emit(step: str) -> None:
+                    ev = {"type": "activity", "step": step}
+                    q.put(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8"))
+
+                emit("Interactive mode enabled: final issue_analysis report generation is deferred.")
+                out = _run_diagnose_error(body, user, ws_id, emit_activity=emit)
+                q.put(f"data: {json.dumps({'type': 'result', 'result': out}, ensure_ascii=False)}\n\n".encode("utf-8"))
+            except Exception as exc:
+                q.put(
+                    f"data: {json.dumps({'type': 'error', 'message': str(exc)}, ensure_ascii=False)}\n\n".encode("utf-8")
+                )
+            finally:
+                q.put(f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8"))
+                q.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            chunk = await asyncio.to_thread(q.get)
+            if chunk is None:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/workspaces")
