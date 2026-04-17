@@ -694,6 +694,14 @@ run_cmd() {
   fi
 }
 
+tail_newest() {
+  # Usage: tail_newest "<glob patterns>" <max_files> <lines_per_file>
+  GLOB_EXPR="$1"
+  MAX_FILES="${2:-3}"
+  LINES="${3:-250}"
+  run_cmd "ls -1t $GLOB_EXPR 2>/dev/null | head -n $MAX_FILES | xargs -r tail -n $LINES"
+}
+
 echo "===BEGIN_NGINX==="
 NGINX_OUT=""
 NGINX_ERR_PATH="$(run_cmd "nginx -T | rg -o \"error_log\\s+[^;]+\" | awk '{print \$2}' | head -n 1")"
@@ -702,7 +710,7 @@ if [ -n "$NGINX_ERR_PATH" ] || [ -n "$NGINX_ACC_PATH" ]; then
   NGINX_OUT="$(run_cmd "tail -n 200 \"$NGINX_ERR_PATH\" \"$NGINX_ACC_PATH\"")"
 fi
 if [ -z "$NGINX_OUT" ] && [ -d /var/log/nginx ]; then
-  NGINX_OUT="$(run_cmd "tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log")"
+  NGINX_OUT="$(tail_newest "/var/log/nginx/*error*.log /var/log/nginx/*access*.log /var/log/nginx/*.log" 5 300)"
 fi
 if [ -z "$NGINX_OUT" ]; then
   NGINX_OUT="$(run_cmd "journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager")"
@@ -718,6 +726,10 @@ if [ -n "$ODOO_CONF_PATH" ]; then
   if [ -n "$ODOO_LOG_PATH" ]; then
     ODOO_OUT="$(run_cmd "tail -n 250 \"$ODOO_LOG_PATH\"")"
   fi
+fi
+if [ -z "$ODOO_OUT" ] && [ -d /var/log/nginx ]; then
+  # Some stacks write Odoo logs through Nginx-managed files (odoo.error.log, etc.).
+  ODOO_OUT="$(tail_newest "/var/log/nginx/odoo*.log /var/log/nginx/*odoo*.log" 5 300)"
 fi
 for f in /var/log/odoo/odoo.log /var/log/odoo/*.log /var/log/odoo.log /opt/odoo/log/*.log; do
   if [ -z "$ODOO_OUT" ] && [ -f "$f" ]; then
@@ -746,7 +758,7 @@ if [ -n "$PGLOG_PATH" ] && [ "$PGLOG_PATH" != "stderr" ]; then
   PGLOG_OUT="$(run_cmd "ls -1t $PGLOG_GLOB 2>/dev/null | head -n 3 | xargs -r tail -n 250")"
 fi
 if [ -z "$PGLOG_OUT" ] && [ -d /var/log/postgresql ]; then
-  PGLOG_OUT="$(run_cmd "tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log")"
+  PGLOG_OUT="$(tail_newest "/var/log/postgresql/*.log /var/log/postgresql/postgresql*.log" 5 300)"
 fi
 if [ -z "$PGLOG_OUT" ]; then
   PGLOG_OUT="$(run_cmd "journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager")"
@@ -759,14 +771,26 @@ if command -v psql >/dev/null 2>&1; then
   PSQL_Q1="SELECT queryid,calls,total_exec_time,mean_exec_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_exec_time DESC NULLS LAST LIMIT 15;"
   PSQL_Q2="SELECT queryid,calls,total_time,mean_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_time DESC NULLS LAST LIMIT 15;"
   PSQL_CHECK="SELECT extname FROM pg_extension WHERE extname='pg_stat_statements';"
+  PSQL_DBS="$(run_cmd "sudo -n -u postgres psql -X -A -t -d postgres -c \"SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate;\"")"
   if [ -n "$SUDO" ]; then
-    $SUDO -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
-      || $SUDO -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
-      || psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
-      || psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
-      || (psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but access is denied for current SSH user.") \
-      || ($SUDO -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but query access failed in this environment.") \
-      || echo "pg_stat_statements extension is not available or access is denied."
+    PGS_OUT=""
+    for DB in $PSQL_DBS postgres; do
+      [ -z "$DB" ] && continue
+      PGS_OUT="$($SUDO -u postgres psql -X -A -F $'\t' -d "$DB" -c "$PSQL_Q1" 2>/dev/null \
+        || $SUDO -u postgres psql -X -A -F $'\t' -d "$DB" -c "$PSQL_Q2" 2>/dev/null || true)"
+      if [ -n "$PGS_OUT" ]; then
+        echo "# database: $DB"
+        echo "$PGS_OUT"
+        break
+      fi
+    done
+    if [ -z "$PGS_OUT" ]; then
+      psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
+        || psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
+        || (psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but access is denied for current SSH user.") \
+        || ($SUDO -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but query access failed in this environment.") \
+        || echo "pg_stat_statements extension is not available or access is denied."
+    fi
   else
     psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
       || psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
@@ -828,6 +852,15 @@ echo "===END_REMOTE_FILES==="
     if len(raw_output) > 6000:
         raw_output = raw_output[:6000] + "\n\n...[truncated]..."
     findings = _analyze_remote_text(nginx_logs, odoo_logs, postgres_logs, pg_stats)
+    remote_log_names = re.findall(r"(?im)^(?:.*\.)?(?:log|log\.\d+|log\.\d+\.gz)$", remote_files)
+    if (
+        any(x and "-- no entries --" in x.lower() for x in (nginx_logs, odoo_logs, postgres_logs))
+        and remote_log_names
+    ):
+        findings.insert(
+            0,
+            "Remote log files are present but sampled sections are empty/low-signal; collector now attempts newest-file tails. Re-run diagnosis to refresh.",
+        )
     if any(x == "(not found)" for x in (nginx_logs, odoo_logs, postgres_logs, pg_stats)):
         findings.insert(
             0,
