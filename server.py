@@ -46,7 +46,7 @@ _bootstrap_secret_key()
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, Field, model_validator
@@ -423,6 +423,21 @@ def workspace_files(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_use
     }
 
 
+@app.get("/api/workspace/download")
+def workspace_download(
+    path: str,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> FileResponse:
+    user, _ws_id, _ws = ctx
+    try:
+        full = _resolve_user_workspace_rel(path, user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not full.exists() or not full.is_file():
+        raise HTTPException(status_code=404, detail="Workspace file not found.")
+    return FileResponse(path=str(full), filename=full.name, media_type="application/octet-stream")
+
+
 class CreateWorkspaceBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
 
@@ -487,6 +502,8 @@ def _render_issue_analysis_html(
       <pre>{html.escape(str(c.get('postgres_logs', '(no data)')))}</pre>
       <h3>pg_stat_statements</h3>
       <pre>{html.escape(str(c.get('pg_stat_statements', '(no data)')))}</pre>
+      <h3>Raw SSH Output (debug)</h3>
+      <pre>{html.escape(str(c.get('raw_output', '(no output)')))}</pre>
     </section>
 """
         for c in ssh_connections
@@ -648,7 +665,7 @@ echo "===END_PGSTATS==="
         auth_mode=row.auth_mode,
         private_key=key,
         password=password,
-        command=f"bash -lc {json.dumps(script)}",
+        command=script,
         timeout_seconds=120,
     )
     body = (res.get("stdout", "") or "") + ("\n" + res.get("stderr", "") if res.get("stderr") else "")
@@ -656,6 +673,17 @@ echo "===END_PGSTATS==="
     odoo_logs = _extract_tagged(body, "ODOO")
     postgres_logs = _extract_tagged(body, "PGLOG")
     pg_stats = _extract_tagged(body, "PGSTATS")
+    raw_output = body.strip() or "(no output)"
+    if len(raw_output) > 6000:
+        raw_output = raw_output[:6000] + "\n\n...[truncated]..."
+    findings = _analyze_remote_text(nginx_logs, odoo_logs, postgres_logs, pg_stats)
+    if any(x == "(not found)" for x in (nginx_logs, odoo_logs, postgres_logs, pg_stats)):
+        findings.insert(
+            0,
+            "Diagnostics command output could not be fully parsed into sections; raw SSH output is included below.",
+        )
+    if res.get("stderr"):
+        findings.append("SSH command produced stderr output (see raw output section).")
     return {
         "diagnostics": True,
         "status": "ok" if res.get("ok") else "warning",
@@ -663,7 +691,8 @@ echo "===END_PGSTATS==="
         "odoo_logs": odoo_logs,
         "postgres_logs": postgres_logs,
         "pg_stat_statements": pg_stats,
-        "findings": _analyze_remote_text(nginx_logs, odoo_logs, postgres_logs, pg_stats),
+        "raw_output": raw_output,
+        "findings": findings,
         "returncode": res.get("returncode"),
     }
 

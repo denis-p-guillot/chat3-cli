@@ -1532,9 +1532,18 @@ function ChatSession({
               {pendingWorkspacePaths.map((path) => (
                 <li key={path}>
                   <span className="attach-name">{path.split('/').pop() || path}</span>
-                  <span className="muted workspace-link-path" title={path}>
+                  <a
+                    className="workspace-link-path"
+                    href={workspaceDownloadUrl(path)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={path}
+                  >
                     {path}
-                  </span>
+                  </a>
+                  <a className="workspace-link-download" href={workspaceDownloadUrl(path)} download title="Download file">
+                    Download
+                  </a>
                   <button
                     type="button"
                     className="btn-icon"
@@ -1662,6 +1671,10 @@ function formatSize(n: number) {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function workspaceDownloadUrl(path: string) {
+  return `/api/workspace/download?path=${encodeURIComponent(path)}`
 }
 
 function ToolBlock({
