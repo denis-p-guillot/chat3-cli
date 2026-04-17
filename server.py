@@ -53,8 +53,6 @@ from chat3 import (
     ensure_dirs,
     ensure_named_workspace_layout,
     iter_agent_turn,
-    named_workspace_root,
-    resolve_rooted_path,
     workspace_session,
 )
 from local_file_analysis import analyze_workspace_file
@@ -112,28 +110,41 @@ def sanitize_filename(name: str) -> str:
     return base[:200]
 
 
-def _resolve_user_workspace_file(rel: str, user_id: int, workspace_id: int) -> Path:
-    """Resolve a workspace-relative path under workspace/users/<user_id>/w/<workspace_id>/."""
+def _resolve_user_workspace_rel(rel: str, user_id: int) -> Path:
+    """Resolve paths stored as users/<user_id>/w/<workspace_id>/uploads/... relative to WORKSPACE_DIR."""
+    raw = rel.strip().replace("\\", "/")
+    if not raw or raw.startswith("/") or ".." in raw.split("/"):
+        raise ValueError(f"Invalid workspace path: {rel}")
+    uid_str = str(int(user_id))
+    if not raw.startswith(f"users/{uid_str}/"):
+        raise ValueError("Workspace path is not for this user.")
+    full = (WORKSPACE_DIR / raw).resolve()
+    user_root = (WORKSPACE_DIR / "users" / uid_str).resolve()
     try:
-        path = resolve_rooted_path("workspace", rel)
+        full.relative_to(user_root)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid workspace path: {rel}") from exc
-    user_root = named_workspace_root(user_id, workspace_id)
-    try:
-        path.relative_to(user_root)
-    except ValueError as exc:
-        raise HTTPException(status_code=403, detail="Workspace path is not allowed for this user.") from exc
-    return path
+        raise ValueError("Workspace path is not allowed for this user.") from exc
+    return full
 
 
-def expand_workspace_file(rel: str, user_id: int, workspace_id: int) -> str:
-    """Inject only local analysis into the prompt — never raw full-file dumps."""
-    path = _resolve_user_workspace_file(rel, user_id, workspace_id)
+def expand_workspace_file(rel: str, user_id: int) -> str:
+    """Inject only local analysis into the prompt — never raw full-file dumps. Never raises HTTPException."""
+    try:
+        path = _resolve_user_workspace_rel(rel, user_id)
+    except ValueError as exc:
+        return f"---\n**Attachment skipped:** {exc}\n"
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=400, detail=f"Workspace file not found: {rel}")
+        return (
+            "---\n"
+            f"**Attachment not found:** `{rel}`\n\n"
+            "The file may have been removed, or this message refers to another workspace.\n"
+        )
     size = path.stat().st_size
     if size > MAX_FILE_BYTES:
-        raise HTTPException(status_code=400, detail=f"File exceeds maximum size ({MAX_FILE_BYTES} bytes): {rel}")
+        return (
+            "---\n"
+            f"**Attachment too large to process:** `{rel}` (max {MAX_FILE_BYTES} bytes).\n"
+        )
     body = analyze_workspace_file(path, rel)
     return (
         "---\n"
@@ -142,14 +153,15 @@ def expand_workspace_file(rel: str, user_id: int, workspace_id: int) -> str:
     )
 
 
-def expand_user_message_with_workspace(text: str, workspace_files: list[str], user_id: int, workspace_id: int) -> str:
+def expand_user_message_with_workspace(text: str, workspace_files: list[str], user_id: int) -> str:
     parts: list[str] = []
     if text.strip():
         parts.append(text.strip())
     if len(workspace_files) > MAX_ATTACHMENTS:
-        raise HTTPException(status_code=400, detail=f"Too many workspace files (max {MAX_ATTACHMENTS}).")
+        parts.append(f"[Too many workspace files (max {MAX_ATTACHMENTS}); extras ignored.]")
+        workspace_files = workspace_files[:MAX_ATTACHMENTS]
     for rel in workspace_files:
-        parts.append(expand_workspace_file(rel, user_id, workspace_id))
+        parts.append(expand_workspace_file(rel, user_id))
     return "\n\n".join(parts)
 
 
@@ -201,11 +213,11 @@ def meta(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace
     }
 
 
-def prepare_history(body: ChatBody, user_id: int, workspace_id: int) -> list[dict[str, str]]:
+def prepare_history(body: ChatBody, user_id: int) -> list[dict[str, str]]:
     history: list[dict[str, str]] = []
     for m in body.messages:
         if m.role == "user" and m.workspace_files:
-            content = expand_user_message_with_workspace(m.content, list(m.workspace_files), user_id, workspace_id)
+            content = expand_user_message_with_workspace(m.content, list(m.workspace_files), user_id)
         else:
             content = m.content
         history.append({"role": m.role, "content": content})
@@ -275,7 +287,13 @@ def chat_stream(
 
     def event_stream() -> Iterator[bytes]:
         with workspace_session(user.id, ws_id):
-            history = prepare_history(body, user.id, ws_id)
+            try:
+                history = prepare_history(body, user.id)
+            except Exception as exc:
+                err = {"type": "error", "message": f"Could not prepare messages: {exc}"}
+                yield f"data: {json.dumps(err)}\n\n".encode("utf-8")
+                yield f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8")
+                return
             try:
                 for ev in iter_agent_turn(client, history):
                     yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8")
