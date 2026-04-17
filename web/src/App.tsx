@@ -41,6 +41,11 @@ import {
   type SshConnection,
 } from './lib/connectivity'
 import { runDiagnoseError } from './lib/tools'
+import { ToolboxWidget } from './components/ToolboxWidget'
+import { ConnectivityWidget, type SshFormState } from './components/ConnectivityWidget'
+import { WorkspaceFilesWidget } from './components/WorkspaceFilesWidget'
+import { EnvironmentWidget } from './components/EnvironmentWidget'
+import { AccountWidget } from './components/AccountWidget'
 import './App.css'
 
 const WORKSPACE_PATH_DRAG_TYPE = 'application/x-purplecloud-workspace-path'
@@ -173,14 +178,6 @@ function IconToolbox({ className }: { className?: string }) {
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 8.5h18v10A2.5 2.5 0 0118.5 21h-13A2.5 2.5 0 013 18.5v-10z" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 8.5V6.8A1.8 1.8 0 0110.8 5h2.4A1.8 1.8 0 0115 6.8v1.7" />
       <path strokeLinecap="round" strokeLinejoin="round" d="M3 12.5h18" />
-    </svg>
-  )
-}
-
-function IconEdit({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M4 20h4l10-10a2.2 2.2 0 10-3.1-3.1L4.9 16.9 4 20z" />
     </svg>
   )
 }
@@ -457,7 +454,7 @@ function ChatSession({
   const [sshOpen, setSshOpen] = useState(false)
   const [sshEditorOpen, setSshEditorOpen] = useState(false)
   const [sshEditingName, setSshEditingName] = useState<string | null>(null)
-  const [sshForm, setSshForm] = useState({
+  const [sshForm, setSshForm] = useState<SshFormState>({
     name: '',
     host: '',
     port: 22,
@@ -877,8 +874,7 @@ function ChatSession({
     }
   }
 
-  const submitSsh = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const submitSsh = async () => {
     setSshErr(null)
     setSshBusy(true)
     try {
@@ -998,10 +994,6 @@ function ChatSession({
     if (lv.tools.length > 0) return 'Calling model…'
     return 'Thinking…'
   })()
-  const filteredWorkspaceEntries = workspaceEntries.filter((entry) => {
-    if (!workspaceSearch.trim()) return true
-    return entry.path.toLowerCase().includes(workspaceSearch.trim().toLowerCase())
-  })
   const canSend =
     historyHydrated && !busy && (input.trim().length > 0 || pendingFiles.length > 0 || pendingWorkspacePaths.length > 0)
   const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
@@ -1055,407 +1047,76 @@ function ChatSession({
           </div>
         </div>
 
-        {toolboxOpen && (
-          <div className="sidebar-section sidebar-widget">
-            <h2>Toolbox</h2>
-            <div
-              className={`toolbox-item ${toolboxDragOver ? 'toolbox-drop' : ''}`}
-              onDragEnter={(e) => {
-                const hasSsh = Array.from(e.dataTransfer.types).includes(SSH_CONNECTION_DRAG_TYPE)
-                if (!hasSsh) return
-                e.preventDefault()
-                setToolboxDragOver(true)
-              }}
-              onDragOver={(e) => {
-                const hasSsh = Array.from(e.dataTransfer.types).includes(SSH_CONNECTION_DRAG_TYPE)
-                if (!hasSsh) return
-                e.preventDefault()
-                e.dataTransfer.dropEffect = 'copy'
-              }}
-              onDragLeave={(e) => {
-                if (e.currentTarget.contains(e.relatedTarget as Node)) return
-                setToolboxDragOver(false)
-              }}
-              onDrop={(e) => {
-                e.preventDefault()
-                setToolboxDragOver(false)
-                const name = e.dataTransfer.getData(SSH_CONNECTION_DRAG_TYPE)
-                if (name) addDiagnoseSshConnection(name)
-              }}
-            >
-              <h3>Diagnose Error</h3>
-              <p className="muted toolbox-help">
-                Generates <code>issue_analysis.html</code> in the active workspace and links it to your next prompt.
-              </p>
-              <p className="muted toolbox-help">
-                Drag SSH connections from the Connectivity widget here to grant diagnosis SSH scope.
-              </p>
-              {diagnoseSshConnections.length > 0 && (
-                <ul className="toolbox-ssh-list">
-                  {diagnoseSshConnections.map((name) => (
-                    <li key={name}>
-                      <span>{name}</span>
-                      <button
-                        type="button"
-                        className="btn-icon"
-                        onClick={() => removeDiagnoseSshConnection(name)}
-                        aria-label={`Remove SSH connection ${name}`}
-                      >
-                        ×
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <textarea
-                className="toolbox-textarea"
-                placeholder="Paste logs, traceback, or incident context..."
-                value={diagnoseContext}
-                onChange={(e) => setDiagnoseContext(e.target.value)}
-                rows={5}
-              />
-              {diagnoseErr && <p className="warn">{diagnoseErr}</p>}
-              <button type="button" className="btn secondary" onClick={() => void diagnoseError()} disabled={diagnoseBusy}>
-                {diagnoseBusy ? 'Generating…' : 'Run Diagnose Error'}
-              </button>
-            </div>
-          </div>
-        )}
+        <ToolboxWidget
+          open={toolboxOpen}
+          dragOver={toolboxDragOver}
+          diagnoseBusy={diagnoseBusy}
+          diagnoseErr={diagnoseErr}
+          diagnoseContext={diagnoseContext}
+          diagnoseSshConnections={diagnoseSshConnections}
+          sshDragType={SSH_CONNECTION_DRAG_TYPE}
+          onDragOverState={setToolboxDragOver}
+          onDropSshConnection={addDiagnoseSshConnection}
+          onRemoveDiagnoseSshConnection={removeDiagnoseSshConnection}
+          onDiagnoseContextChange={setDiagnoseContext}
+          onRunDiagnose={() => void diagnoseError()}
+        />
 
-        <div className="sidebar-section">
-          <h2>Account</h2>
-          <p className="account-name">{me.display_name}</p>
-          <p className="account-user muted" title={me.username}>
-            {me.username.includes('@') ? me.username : `@${me.username}`}
-          </p>
-          <label className="workspace-label">
-            Workspace
-            <select
-              className="workspace-select"
-              value={me.active_workspace_id}
-              onChange={(e) => void switchWorkspace(Number(e.target.value))}
-              disabled={workspaceBusy || busy || !historyHydrated}
-              aria-label="Active workspace"
-            >
-              {workspaceList.length === 0 ? (
-                <option value={me.active_workspace_id}>{me.active_workspace_name || 'Default'}</option>
-              ) : (
-                workspaceList.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))
-              )}
-            </select>
-          </label>
-          <button
-            type="button"
-            className="btn secondary workspace-new-btn"
-            onClick={() => void addWorkspace()}
-            disabled={workspaceBusy || busy || !historyHydrated}
-          >
-            New workspace
-          </button>
-          {!me.has_openai_key && (
-            <p className="warn">Add your OpenAI API key in Settings before sending messages.</p>
-          )}
-        </div>
+        <AccountWidget
+          me={me}
+          workspaceList={workspaceList}
+          workspaceBusy={workspaceBusy}
+          busy={busy}
+          historyHydrated={historyHydrated}
+          onSwitchWorkspace={(id) => void switchWorkspace(id)}
+          onAddWorkspace={() => void addWorkspace()}
+        />
 
-        <div className="sidebar-section sidebar-widget">
-          <h2>
-            <span>Connectivity (SSH)</span>
-            <span className="ssh-head-actions">
-              <button type="button" className="workspace-refresh-btn" onClick={startNewSsh} disabled={sshBusy}>
-                New
-              </button>
-              <button
-                type="button"
-                className="workspace-refresh-btn"
-                onClick={() => setSshOpen((v) => !v)}
-                aria-label={sshOpen ? 'Collapse connectivity section' : 'Expand connectivity section'}
-              >
-                {sshOpen ? 'Hide' : 'Show'}
-              </button>
-            </span>
-          </h2>
-          {sshErr && <p className="warn">{sshErr}</p>}
-          {sshOpen && (
-            <>
-              {sshEditorOpen && (
-                <form className="ssh-form" onSubmit={(e) => void submitSsh(e)}>
-                  <input
-                    value={sshForm.name}
-                    onChange={(e) => setSshForm((x) => ({ ...x, name: e.target.value }))}
-                    placeholder="Connection name (e.g. prod)"
-                    required
-                    maxLength={128}
-                  />
-                  <input
-                    value={sshForm.host}
-                    onChange={(e) => setSshForm((x) => ({ ...x, host: e.target.value }))}
-                    placeholder="Host (e.g. server.example.com)"
-                    required
-                    maxLength={255}
-                  />
-                  <div className="ssh-inline">
-                    <input
-                      value={sshForm.username}
-                      onChange={(e) => setSshForm((x) => ({ ...x, username: e.target.value }))}
-                      placeholder="Username"
-                      required
-                      maxLength={128}
-                    />
-                    <input
-                      type="number"
-                      value={sshForm.port}
-                      onChange={(e) => setSshForm((x) => ({ ...x, port: Number(e.target.value) || 22 }))}
-                      min={1}
-                      max={65535}
-                      placeholder="Port"
-                    />
-                  </div>
-                  <select
-                    value={sshForm.auth_mode}
-                    onChange={(e) =>
-                      setSshForm((x) => ({
-                        ...x,
-                        auth_mode: e.target.value as 'private_key' | 'password' | 'private_key_password',
-                      }))
-                    }
-                  >
-                    <option value="private_key">Private key</option>
-                    <option value="password">Password</option>
-                    <option value="private_key_password">Private key + password</option>
-                  </select>
-                  {sshForm.auth_mode !== 'password' && (
-                    <textarea
-                      value={sshForm.private_key}
-                      onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
-                      placeholder="Private key (PEM)"
-                      rows={4}
-                      required
-                    />
-                  )}
-                  {sshForm.auth_mode !== 'private_key' && (
-                    <input
-                      type="password"
-                      value={sshForm.password}
-                      onChange={(e) => setSshForm((x) => ({ ...x, password: e.target.value }))}
-                      placeholder="Password"
-                      required
-                    />
-                  )}
-                  <p className="muted ssh-editor-hint">
-                    {sshEditingName
-                      ? `Editing "${sshEditingName}". Provide credentials to update this connection.`
-                      : 'Create a new SSH connection profile.'}
-                  </p>
-                  <div className="ssh-editor-actions">
-                    <button type="submit" className="btn secondary" disabled={sshBusy}>
-                      {sshEditingName ? 'Update connection' : 'Save connection'}
-                    </button>
-                    <button
-                      type="button"
-                      className="workspace-refresh-btn"
-                      onClick={() => {
-                        setSshEditorOpen(false)
-                        setSshEditingName(null)
-                      }}
-                    >
-                      Close
-                    </button>
-                  </div>
-                </form>
-              )}
-              {sshConnections.length > 0 && (
-                <div className="ssh-buttons-list">
-                  {sshConnections.map((c) => (
-                    <div key={c.id} className="ssh-button-row">
-                      <button
-                        type="button"
-                        className="ssh-conn-btn"
-                        draggable
-                        onDragStart={(e) => {
-                          e.dataTransfer.setData(SSH_CONNECTION_DRAG_TYPE, c.name)
-                          e.dataTransfer.effectAllowed = 'copy'
-                        }}
-                        title="Drag to Toolbox > Diagnose Error."
-                      >
-                        <strong>{c.name}</strong>
-                        <span>
-                          {c.username}@{c.host}:{c.port}
-                        </span>
-                      </button>
-                      <div className="ssh-actions">
-                        <button
-                          type="button"
-                          className="ssh-icon-btn"
-                          onClick={() => editSsh(c)}
-                          aria-label={`Edit SSH connection ${c.name}`}
-                          title="Edit connection"
-                          disabled={sshBusy}
-                        >
-                          <IconEdit className="ssh-icon-svg" />
-                        </button>
-                        {sshEditorOpen && sshEditingName === c.name && (
-                          <>
-                            <button
-                              type="button"
-                              className="workspace-refresh-btn"
-                              onClick={() => void testSsh(c.id)}
-                              disabled={sshBusy}
-                            >
-                              Test
-                            </button>
-                            <button
-                              type="button"
-                              className="workspace-refresh-btn"
-                              onClick={() => void removeSsh(c.id)}
-                              disabled={sshBusy}
-                            >
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        <ConnectivityWidget
+          open={sshOpen}
+          busy={sshBusy}
+          error={sshErr}
+          editorOpen={sshEditorOpen}
+          editingName={sshEditingName}
+          form={sshForm}
+          connections={sshConnections}
+          sshDragType={SSH_CONNECTION_DRAG_TYPE}
+          onToggleOpen={() => setSshOpen((v) => !v)}
+          onStartNew={startNewSsh}
+          onCloseEditor={() => {
+            setSshEditorOpen(false)
+            setSshEditingName(null)
+          }}
+          onFormChange={setSshForm}
+          onSubmit={() => void submitSsh()}
+          onEdit={editSsh}
+          onTest={(id) => void testSsh(id)}
+          onDelete={(id) => void removeSsh(id)}
+        />
 
-        <div className="sidebar-section sidebar-widget">
-          <h2>
-            <span>Environment</span>
-            <button
-              type="button"
-              className="workspace-refresh-btn"
-              onClick={() => setEnvironmentOpen((v) => !v)}
-              aria-label={environmentOpen ? 'Collapse environment section' : 'Expand environment section'}
-            >
-              {environmentOpen ? 'Hide' : 'Show'}
-            </button>
-          </h2>
-          {environmentOpen && (
-            <>
-              {metaErr && <p className="warn">Could not load /api/meta ({metaErr}). Is the API running?</p>}
-              {meta && (
-                <dl className="meta-list">
-                  <div>
-                    <dt>Model</dt>
-                    <dd>{meta.model}</dd>
-                  </div>
-                  <div>
-                    <dt>Workspace</dt>
-                    <dd title={meta.workspace}>{shortPath(meta.workspace)}</dd>
-                  </div>
-                  <div>
-                    <dt>Base dir</dt>
-                    <dd title={meta.base_dir}>{shortPath(meta.base_dir)}</dd>
-                  </div>
-                  {meta.user_workspace && (
-                    <div>
-                      <dt>Your workspace</dt>
-                      <dd title={meta.user_workspace}>{shortPath(meta.user_workspace)}</dd>
-                    </div>
-                  )}
-                  {meta.user_workspace_abs && (
-                    <div>
-                      <dt>Your folder (disk)</dt>
-                      <dd title={meta.user_workspace_abs}>{shortPath(meta.user_workspace_abs)}</dd>
-                    </div>
-                  )}
-                </dl>
-              )}
-            </>
-          )}
-        </div>
+        <EnvironmentWidget
+          open={environmentOpen}
+          onToggle={() => setEnvironmentOpen((v) => !v)}
+          meta={meta}
+          metaErr={metaErr}
+          shortPath={shortPath}
+        />
 
-        <div className="sidebar-section">
-          <div className="workspace-files-head">
-            <h2>Workspace files</h2>
-            <div className="workspace-files-actions">
-              {workspaceFilesOpen && (
-                <button
-                  type="button"
-                  className="workspace-refresh-btn"
-                  onClick={() => void refreshWorkspaceFiles()}
-                  disabled={workspaceFilesBusy}
-                  aria-label="Refresh workspace files"
-                  title="Refresh file list"
-                >
-                  Refresh
-                </button>
-              )}
-              <button
-                type="button"
-                className="workspace-refresh-btn"
-                onClick={() => setWorkspaceFilesOpen((v) => !v)}
-                aria-label={workspaceFilesOpen ? 'Collapse workspace files section' : 'Expand workspace files section'}
-              >
-                {workspaceFilesOpen ? 'Hide' : 'Show'}
-              </button>
-            </div>
-          </div>
-          {workspaceFilesOpen && (
-            <>
-              <input
-                className="workspace-search"
-                value={workspaceSearch}
-                onChange={(e) => setWorkspaceSearch(e.target.value)}
-                placeholder="Search files..."
-                aria-label="Search workspace files"
-              />
-              {workspaceFilesErr && <p className="warn">Could not list files ({workspaceFilesErr}).</p>}
-              {!workspaceFilesErr && filteredWorkspaceEntries.length === 0 && !workspaceFilesBusy && (
-                <p className="muted workspace-empty">No files yet in this workspace.</p>
-              )}
-              {workspaceFilesBusy && <p className="muted workspace-empty">Loading files…</p>}
-              {filteredWorkspaceEntries.length > 0 && (
-                <ul className="workspace-files-list" aria-label="Workspace files">
-                  {filteredWorkspaceEntries.map((entry) => (
-                    <li
-                      key={`${entry.type}-${entry.path}`}
-                      draggable={entry.type === 'file'}
-                      onDragStart={(e) => {
-                        if (entry.type !== 'file') return
-                        e.dataTransfer.setData(WORKSPACE_PATH_DRAG_TYPE, entry.path)
-                        e.dataTransfer.setData('text/plain', entry.path)
-                        e.dataTransfer.effectAllowed = 'copy'
-                      }}
-                      title={entry.type === 'file' ? 'Drag to composer to link this file' : undefined}
-                    >
-                      <span className="workspace-file-kind" aria-hidden>
-                        {entry.type === 'dir' ? 'D' : 'F'}
-                      </span>
-                      <span className="workspace-file-path" title={entry.path}>
-                        {entry.path}
-                      </span>
-                      {entry.type === 'file' && typeof entry.size === 'number' && (
-                        <span className="workspace-file-size">{formatSize(entry.size)}</span>
-                      )}
-                      {entry.type === 'file' && (
-                        <button
-                          type="button"
-                          className="workspace-link-btn"
-                          onClick={() => addPendingWorkspacePath(entry.path)}
-                          disabled={pendingWorkspacePaths.includes(entry.path)}
-                        >
-                          {pendingWorkspacePaths.includes(entry.path) ? 'Linked' : 'Link'}
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {workspaceFilesTruncated && (
-                <p className="muted workspace-empty">List truncated. Narrow files or cleanup to see all entries.</p>
-              )}
-            </>
-          )}
-        </div>
+        <WorkspaceFilesWidget
+          open={workspaceFilesOpen}
+          busy={workspaceFilesBusy}
+          error={workspaceFilesErr}
+          truncated={workspaceFilesTruncated}
+          entries={workspaceEntries}
+          search={workspaceSearch}
+          pendingWorkspacePaths={pendingWorkspacePaths}
+          workspaceDragType={WORKSPACE_PATH_DRAG_TYPE}
+          onToggleOpen={() => setWorkspaceFilesOpen((v) => !v)}
+          onRefresh={() => void refreshWorkspaceFiles()}
+          onSearchChange={setWorkspaceSearch}
+          onLinkPath={addPendingWorkspacePath}
+          formatSize={formatSize}
+        />
 
         <div className="sidebar-actions">
           <button
