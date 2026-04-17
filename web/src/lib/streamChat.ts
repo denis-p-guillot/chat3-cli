@@ -5,16 +5,11 @@ export type StreamEvent =
   | { type: 'done' }
   | { type: 'error'; message: string }
 
-export type AttachmentPayload = {
-  name: string
-  media_type: string
-  data_base64: string
-}
-
 export type ChatMessagePayload = {
   role: string
   content: string
-  attachments?: AttachmentPayload[]
+  /** Paths relative to workspace (e.g. uploads/uuid_filename) */
+  workspace_files?: string[]
 }
 
 export async function streamChat(
@@ -24,6 +19,7 @@ export async function streamChat(
   const res = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
     body: JSON.stringify({ messages }),
   })
   if (!res.ok) {

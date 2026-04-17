@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tarfile
 import zipfile
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from collections.abc import Iterator
 from pathlib import Path
@@ -25,6 +27,10 @@ MODEL = "gpt-5.4"
 
 SYSTEM_PROMPT = """
 You are a helpful technical assistant running in a local CLI.
+
+Heavy lifting (reading whole files, searching repos, parsing archives) happens on the machine. User uploads may appear only as locally produced summaries (structure, samples, counts)—not as full file dumps. Do not assume you have seen entire large files unless a tool returned that content.
+
+Your strengths are to arbitrate options, orchestrate tools, and bring insight: plan steps, interpret tool output, compare approaches, and explain tradeoffs.
 
 You have access to filesystem tools, git tools, archive list/extract (tar and zip), grep_files for log search, fs_read_file_chunk for large files, and fs_stat for file metadata.
 
@@ -43,7 +49,7 @@ Behavior rules:
   2. read/edit files
   3. inspect diff
   4. commit changes if requested
-- Do not invent repository state.
+- Do not invent repository state or file contents you have not read via tools.
 - Briefly explain what you changed after successful edits.
 - Use markdown when useful.
 
@@ -56,14 +62,76 @@ Important stopping rules:
 """.strip()
 
 BASE_DIR = Path(__file__).resolve().parent
-HISTORY_DIR = BASE_DIR / "history"
-HISTORY_FILE = HISTORY_DIR / "history.json"
 WORKSPACE_DIR = BASE_DIR / "workspace"
 
+# Per-workspace tool root: workspace/users/<id>/ (CLI default id: CHAT3_WORKSPACE_ID or "local").
+_workspace_root_ctx: ContextVar[Path | None] = ContextVar("_workspace_root_ctx", default=None)
+
 ALLOWED_ROOTS: dict[str, Path] = {
-    "workspace": WORKSPACE_DIR,
     "base_dir": BASE_DIR,
 }
+
+
+def default_workspace_user_root() -> Path:
+    """CLI / default session: workspace/users/<CHAT3_WORKSPACE_ID>/ (default: local)."""
+    wid = os.environ.get("CHAT3_WORKSPACE_ID", "local").strip() or "local"
+    return WORKSPACE_DIR / "users" / wid
+
+
+def history_json_path() -> Path:
+    """CLI conversation persistence (per workspace)."""
+    return default_workspace_user_root() / "history.json"
+
+
+def storage_dir_path() -> Path:
+    """Arbitrary files for this workspace (per workspace)."""
+    return default_workspace_user_root() / "storage"
+
+
+def legacy_user_home(user_id: int) -> Path:
+    """Pre–multi-workspace layout: workspace/users/<id>/ (flat). Used only for migration."""
+    return (WORKSPACE_DIR / "users" / str(int(user_id))).resolve()
+
+
+def named_workspace_root(user_id: int, workspace_id: int) -> Path:
+    """Web/API: workspace/users/<user_id>/w/<workspace_id>/."""
+    return (WORKSPACE_DIR / "users" / str(int(user_id)) / "w" / str(int(workspace_id))).resolve()
+
+
+def ensure_named_workspace_layout(user_id: int, workspace_id: int) -> Path:
+    """Create uploads/, storage/ under a named workspace."""
+    root = named_workspace_root(user_id, workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "storage").mkdir(exist_ok=True)
+    (root / "uploads").mkdir(exist_ok=True)
+    return root
+
+
+@contextmanager
+def workspace_session(user_id: int, workspace_id: int):
+    """Scope filesystem tools to workspace/users/<user_id>/w/<workspace_id>/ (HTTP agent turns)."""
+    root = ensure_named_workspace_layout(user_id, workspace_id)
+    token = _workspace_root_ctx.set(root)
+    try:
+        yield root
+    finally:
+        _workspace_root_ctx.reset(token)
+
+
+def migrate_legacy_user_data_to_named_workspace(user_id: int, workspace_id: int) -> None:
+    """Move uploads/, storage/, chat_messages.json from old flat users/<id>/ into users/<id>/w/<ws_id>/."""
+    legacy = legacy_user_home(user_id)
+    target = named_workspace_root(user_id, workspace_id)
+    if not legacy.exists():
+        return
+    target.mkdir(parents=True, exist_ok=True)
+    for name in ("uploads", "storage"):
+        src = legacy / name
+        if src.exists() and src.is_dir() and not (target / name).exists():
+            shutil.move(str(src), str(target / name))
+    cm = legacy / "chat_messages.json"
+    if cm.is_file() and not (target / "chat_messages.json").exists():
+        shutil.move(str(cm), str(target / "chat_messages.json"))
 
 READ_MAX_BYTES = 200_000
 CHUNK_MAX_BYTES = 500_000
@@ -77,8 +145,11 @@ console = Console()
 
 
 def ensure_dirs() -> None:
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    rw = default_workspace_user_root()
+    rw.mkdir(parents=True, exist_ok=True)
+    (rw / "storage").mkdir(exist_ok=True)
+    (rw / "uploads").mkdir(exist_ok=True)
 
 
 def utc_now_iso() -> str:
@@ -88,11 +159,12 @@ def utc_now_iso() -> str:
 def load_history() -> list[dict[str, Any]]:
     ensure_dirs()
 
-    if not HISTORY_FILE.exists():
+    hf = history_json_path()
+    if not hf.exists():
         return []
 
     try:
-        with HISTORY_FILE.open("r", encoding="utf-8") as f:
+        with hf.open("r", encoding="utf-8") as f:
             data = json.load(f)
 
         if not isinstance(data, list):
@@ -125,7 +197,7 @@ def save_history(history: list[dict[str, Any]]) -> None:
     ensure_dirs()
 
     try:
-        with HISTORY_FILE.open("w", encoding="utf-8") as f:
+        with history_json_path().open("w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as exc:
         console.print(f"[red]Failed to save history:[/red] {exc}")
@@ -160,8 +232,8 @@ def show_banner() -> None:
     banner = Text("ChatGPT CLI", style="bold cyan")
     console.print(Panel(banner, subtitle=f"Model: {MODEL}", border_style="blue"))
     console.print("[bold green]Commands[/bold green]: /exit  /quit  /clear  /history  /help")
-    console.print(f"[dim]History file:[/dim] {HISTORY_FILE}")
-    console.print(f"[dim]Workspace root:[/dim] {WORKSPACE_DIR}")
+    console.print(f"[dim]History file:[/dim] {history_json_path()}")
+    console.print(f"[dim]Workspace root:[/dim] {default_workspace_user_root()}")
     console.print(f"[dim]Base dir root:[/dim] {BASE_DIR}")
     console.print()
 
@@ -177,8 +249,10 @@ def show_help() -> None:
                     "[bold]/help[/bold]                  Show this help",
                     "",
                     "Allowed roots:",
-                    f"- workspace: {WORKSPACE_DIR}",
+                    f"- workspace: {default_workspace_user_root()}",
                     f"- base_dir: {BASE_DIR}",
+                    "",
+                    "Switch CLI workspace: [bold]CHAT3_WORKSPACE_ID[/bold] (default: local).",
                 ]
             ),
             title="Help",
@@ -243,6 +317,11 @@ def render_tool_result(name: str, result: str) -> None:
 
 
 def get_root_path(root: str) -> Path:
+    if root == "workspace":
+        override = _workspace_root_ctx.get()
+        if override is not None:
+            return override.resolve()
+        return default_workspace_user_root().resolve()
     if root not in ALLOWED_ROOTS:
         raise ValueError(f"Unsupported root: {root}")
     return ALLOWED_ROOTS[root].resolve()

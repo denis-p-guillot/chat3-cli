@@ -37,7 +37,7 @@ Development (two terminals):
    cd web && npm install && npm run dev
    ```
 
-Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The UI streams tool calls and assistant replies over SSE. You can attach files from the composer (text is inlined; other files are sent as base64 for the model to interpret).
+Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The UI streams tool calls and assistant replies over SSE. Attached files are **saved under** `workspace/uploads/` (up to 500 MB per file). The API **parses and summarizes them locally**; the model receives those summaries and uses tools to read or change files—it does not get raw full-file dumps in the chat.
 
 Production-style (single process serving API + built static files):
 

@@ -28,4 +28,7 @@ free_port() {
 
 free_port "$PORT"
 
+# SECRET_KEY: set in the environment or in a .env file next to server.py.
+# If unset, the server creates data/.local_secret_key (ignored by git) on first run.
+
 exec .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$PORT" --reload
