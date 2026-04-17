@@ -92,6 +92,7 @@ app.include_router(auth_router, prefix="/api")
 MAX_FILE_BYTES = 500 * 1024 * 1024
 MAX_ATTACHMENTS = 20
 MAX_TOTAL_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024
+MAX_WORKSPACE_LIST_ENTRIES = 800
 
 
 def current_user_workspace(
@@ -383,6 +384,33 @@ async def upload_workspace_files(
         finally:
             await uf.close()
     return {"files": out}
+
+
+@app.get("/api/workspace/files")
+def workspace_files(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, Any]:
+    """List files visible in the active workspace root."""
+    user, ws_id, _ws = ctx
+    root = ensure_named_workspace_layout(user.id, ws_id)
+    entries: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*")):
+        if len(entries) >= MAX_WORKSPACE_LIST_ENTRIES:
+            break
+        rel = path.relative_to(root).as_posix()
+        if not rel:
+            continue
+        if path.is_dir():
+            entries.append({"path": rel, "type": "dir"})
+        elif path.is_file():
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            entries.append({"path": rel, "type": "file", "size": size})
+    return {
+        "root": f"users/{user.id}/w/{ws_id}",
+        "entries": entries,
+        "truncated": len(entries) >= MAX_WORKSPACE_LIST_ENTRIES,
+    }
 
 
 class CreateWorkspaceBody(BaseModel):

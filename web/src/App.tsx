@@ -32,7 +32,10 @@ import {
   fetchWorkspacesList,
   type WorkspaceSummary,
 } from './lib/workspaces'
+import { fetchWorkspaceFiles, type WorkspaceEntry } from './lib/workspaceFiles'
 import './App.css'
+
+const WORKSPACE_PATH_DRAG_TYPE = 'application/x-purplecloud-workspace-path'
 
 type ToolRow = {
   name: string
@@ -367,6 +370,12 @@ function ChatSession({
   const [historyHydrated, setHistoryHydrated] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<WorkspaceSummary[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([])
+  const [workspaceFilesBusy, setWorkspaceFilesBusy] = useState(false)
+  const [workspaceFilesErr, setWorkspaceFilesErr] = useState<string | null>(null)
+  const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
+  const [workspaceSearch, setWorkspaceSearch] = useState('')
+  const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
 
   useEffect(() => {
     fetch('/api/meta', { credentials: 'include' })
@@ -379,6 +388,31 @@ function ChatSession({
     void fetchWorkspacesList()
       .then((d) => setWorkspaceList(d.workspaces))
       .catch(() => setWorkspaceList([]))
+  }, [me.id, me.active_workspace_id])
+
+  const refreshWorkspaceFiles = async () => {
+    setWorkspaceFilesBusy(true)
+    setWorkspaceFilesErr(null)
+    try {
+      const data = await fetchWorkspaceFiles()
+      setWorkspaceEntries(data.entries)
+      setWorkspaceFilesTruncated(data.truncated)
+    } catch (e) {
+      setWorkspaceEntries([])
+      setWorkspaceFilesTruncated(false)
+      setWorkspaceFilesErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setWorkspaceFilesBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshWorkspaceFiles()
+  }, [me.id, me.active_workspace_id])
+
+  useEffect(() => {
+    setPendingWorkspacePaths([])
+    setWorkspaceSearch('')
   }, [me.id, me.active_workspace_id])
 
   useEffect(() => {
@@ -521,7 +555,8 @@ function ChatSession({
     if (!historyHydrated) return
     const text = input.trim()
     const files = pendingFiles
-    if ((!text && files.length === 0) || busy) return
+    const linkedPaths = pendingWorkspacePaths
+    if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return
 
     if (files.length > MAX_ATTACHMENTS) {
       alert(`You can attach at most ${MAX_ATTACHMENTS} files.`)
@@ -552,12 +587,20 @@ function ChatSession({
     }
 
     const userId = uid()
-    const workspacePaths = uploaded.map((u) => u.path)
-    const attachmentSummary: { name: string; size: number; path: string }[] = uploaded.map((u) => ({
-      name: u.name,
-      size: u.size,
-      path: u.path,
-    }))
+    const workspacePaths = [...new Set([...linkedPaths, ...uploaded.map((u) => u.path)])]
+    const uploadedByPath = new Map(uploaded.map((u) => [u.path, u]))
+    const attachmentSummary: { name: string; size: number; path: string }[] = workspacePaths.map((path) => {
+      const up = uploadedByPath.get(path)
+      if (up) {
+        return { name: up.name, size: up.size, path }
+      }
+      const entry = workspaceEntries.find((x) => x.type === 'file' && x.path === path)
+      return {
+        name: path.split('/').pop() || path,
+        size: entry?.size ?? 0,
+        path,
+      }
+    })
 
     const payload: ChatMessagePayload[] = [
       ...buildApiPayload(messages),
@@ -568,6 +611,7 @@ function ChatSession({
 
     setInput('')
     setPendingFiles([])
+    setPendingWorkspacePaths([])
     setMessages((m) => [
       ...m,
       {
@@ -578,6 +622,9 @@ function ChatSession({
         attachmentSummary: attachmentSummary.length ? attachmentSummary : undefined,
       },
     ])
+    if (workspacePaths.length > 0) {
+      void refreshWorkspaceFiles()
+    }
 
     await runStream(payload)
   }
@@ -638,11 +685,24 @@ function ChatSession({
     e.preventDefault()
     e.stopPropagation()
     setDragOver(false)
+    const droppedWorkspacePath = e.dataTransfer.getData(WORKSPACE_PATH_DRAG_TYPE)
+    if (droppedWorkspacePath) {
+      setPendingWorkspacePaths((prev) => (prev.includes(droppedWorkspacePath) ? prev : [...prev, droppedWorkspacePath]))
+      return
+    }
     if (e.dataTransfer.files?.length) mergeFilesIntoPending(e.dataTransfer.files)
   }
 
   const removePending = (idx: number) => {
     setPendingFiles((prev) => prev.filter((_, i) => i !== idx))
+  }
+
+  const removePendingWorkspacePath = (path: string) => {
+    setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
+  }
+
+  const addPendingWorkspacePath = (path: string) => {
+    setPendingWorkspacePaths((prev) => (prev.includes(path) ? prev : [...prev, path]))
   }
 
   const switchWorkspace = async (id: number) => {
@@ -682,11 +742,18 @@ function ChatSession({
     if (!busy) return ''
     const lv = streamRef.current
     if (lv.tools.some((t) => t.output === undefined)) return 'Running tools…'
-    if (lv.assistant) return 'Generating reply…'
-    if (lv.tools.length > 0) return 'Processing results…'
+    const assistantText = lv.assistant ?? ''
+    if (assistantText.length > 0) return 'Generating reply…'
+    // Tools finished: backend is in another OpenAI round (or final call) with no SSE until it returns.
+    if (lv.tools.length > 0) return 'Calling model…'
     return 'Thinking…'
   })()
-  const canSend = historyHydrated && !busy && (input.trim().length > 0 || pendingFiles.length > 0)
+  const filteredWorkspaceEntries = workspaceEntries.filter((entry) => {
+    if (!workspaceSearch.trim()) return true
+    return entry.path.toLowerCase().includes(workspaceSearch.trim().toLowerCase())
+  })
+  const canSend =
+    historyHydrated && !busy && (input.trim().length > 0 || pendingFiles.length > 0 || pendingWorkspacePaths.length > 0)
   const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
 
   return (
@@ -794,6 +861,74 @@ function ChatSession({
                 </div>
               )}
             </dl>
+          )}
+        </div>
+
+        <div className="sidebar-section">
+          <div className="workspace-files-head">
+            <h2>Workspace files</h2>
+            <button
+              type="button"
+              className="workspace-refresh-btn"
+              onClick={() => void refreshWorkspaceFiles()}
+              disabled={workspaceFilesBusy}
+              aria-label="Refresh workspace files"
+              title="Refresh file list"
+            >
+              Refresh
+            </button>
+          </div>
+          <input
+            className="workspace-search"
+            value={workspaceSearch}
+            onChange={(e) => setWorkspaceSearch(e.target.value)}
+            placeholder="Search files..."
+            aria-label="Search workspace files"
+          />
+          {workspaceFilesErr && <p className="warn">Could not list files ({workspaceFilesErr}).</p>}
+          {!workspaceFilesErr && filteredWorkspaceEntries.length === 0 && !workspaceFilesBusy && (
+            <p className="muted workspace-empty">No files yet in this workspace.</p>
+          )}
+          {workspaceFilesBusy && <p className="muted workspace-empty">Loading files…</p>}
+          {filteredWorkspaceEntries.length > 0 && (
+            <ul className="workspace-files-list" aria-label="Workspace files">
+              {filteredWorkspaceEntries.map((entry) => (
+                <li
+                  key={`${entry.type}-${entry.path}`}
+                  draggable={entry.type === 'file'}
+                  onDragStart={(e) => {
+                    if (entry.type !== 'file') return
+                    e.dataTransfer.setData(WORKSPACE_PATH_DRAG_TYPE, entry.path)
+                    e.dataTransfer.setData('text/plain', entry.path)
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                  title={entry.type === 'file' ? 'Drag to composer to link this file' : undefined}
+                >
+                  <span className="workspace-file-kind" aria-hidden>
+                    {entry.type === 'dir' ? 'D' : 'F'}
+                  </span>
+                  <span className="workspace-file-path" title={entry.path}>
+                    {entry.path}
+                  </span>
+                  {entry.type === 'file' && typeof entry.size === 'number' && (
+                    <span className="workspace-file-size">{formatSize(entry.size)}</span>
+                  )}
+                  {entry.type === 'file' && (
+                    <button
+                      type="button"
+                      className="workspace-link-btn"
+                      onClick={() => addPendingWorkspacePath(entry.path)}
+                      disabled={pendingWorkspacePaths.includes(entry.path)}
+                    >
+                      {pendingWorkspacePaths.includes(entry.path) ? 'Linked' : 'Link'}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {workspaceFilesTruncated && (
+            <p className="muted workspace-empty">List truncated. Narrow files or cleanup to see all entries.</p>
           )}
         </div>
 
@@ -962,6 +1097,26 @@ function ChatSession({
                   <span>{f.name}</span>
                   <span className="muted">{formatSize(f.size)}</span>
                   <button type="button" className="btn-icon" onClick={() => removePending(i)} aria-label={`Remove ${f.name}`}>
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {pendingWorkspacePaths.length > 0 && (
+            <ul className="pending-files pending-workspace-links">
+              {pendingWorkspacePaths.map((path) => (
+                <li key={path}>
+                  <span className="attach-name">{path.split('/').pop() || path}</span>
+                  <span className="muted workspace-link-path" title={path}>
+                    {path}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    onClick={() => removePendingWorkspacePath(path)}
+                    aria-label={`Remove linked file ${path}`}
+                  >
                     ×
                   </button>
                 </li>
