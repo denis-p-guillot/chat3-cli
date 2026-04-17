@@ -37,7 +37,9 @@ class SshConnectionRow:
     host: str
     port: int
     username: str
-    private_key_encrypted: str
+    auth_mode: str
+    private_key_encrypted: str | None
+    password_encrypted: str | None
     created_at: str
     updated_at: str
 
@@ -74,7 +76,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             host TEXT NOT NULL,
             port INTEGER NOT NULL DEFAULT 22,
             username TEXT NOT NULL,
-            private_key_encrypted TEXT NOT NULL,
+            auth_mode TEXT NOT NULL DEFAULT 'private_key',
+            private_key_encrypted TEXT,
+            password_encrypted TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(user_id, name)
@@ -82,6 +86,20 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ssh_connections_user ON ssh_connections(user_id)")
+    cur2 = conn.execute("PRAGMA table_info(ssh_connections)")
+    ssh_cols = {r[1] for r in cur2.fetchall()}
+    if "auth_mode" not in ssh_cols:
+        conn.execute("ALTER TABLE ssh_connections ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'private_key'")
+    if "password_encrypted" not in ssh_cols:
+        conn.execute("ALTER TABLE ssh_connections ADD COLUMN password_encrypted TEXT")
+    if "private_key_encrypted" in ssh_cols:
+        conn.execute(
+            """
+            UPDATE ssh_connections
+            SET auth_mode = 'private_key'
+            WHERE auth_mode IS NULL OR trim(auth_mode) = ''
+            """
+        )
 
 
 def init_db() -> None:
@@ -302,7 +320,9 @@ def _ssh_row_from_row(row: sqlite3.Row) -> SshConnectionRow:
         host=row["host"] or "",
         port=int(row["port"] or 22),
         username=row["username"] or "",
-        private_key_encrypted=row["private_key_encrypted"] or "",
+        auth_mode=row["auth_mode"] or "private_key",
+        private_key_encrypted=row["private_key_encrypted"],
+        password_encrypted=row["password_encrypted"],
         created_at=row["created_at"] or "",
         updated_at=row["updated_at"] or "",
     )
@@ -313,7 +333,7 @@ def list_ssh_connections(user_id: int) -> list[SshConnectionRow]:
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
             WHERE user_id = ?
             ORDER BY lower(name), id
@@ -330,7 +350,7 @@ def get_ssh_connection(user_id: int, connection_id: int) -> SshConnectionRow | N
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
             WHERE user_id = ? AND id = ?
             """,
@@ -347,7 +367,7 @@ def get_ssh_connection_by_name(user_id: int, name: str) -> SshConnectionRow | No
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
             WHERE user_id = ? AND name = ?
             """,
@@ -365,11 +385,16 @@ def upsert_ssh_connection(
     host: str,
     port: int,
     username: str,
-    private_key_encrypted: str,
+    auth_mode: str,
+    private_key_encrypted: str | None,
+    password_encrypted: str | None,
 ) -> int:
     clean_name = name.strip()[:128]
     clean_host = host.strip()[:255]
     clean_username = username.strip()[:128]
+    # Backward compatibility: older DBs may still enforce private_key_encrypted NOT NULL.
+    # Empty string means "not provided" and is treated as falsy by callers.
+    key_value = private_key_encrypted if private_key_encrypted is not None else ""
     conn = _connect()
     try:
         existing = conn.execute(
@@ -380,19 +405,37 @@ def upsert_ssh_connection(
             conn.execute(
                 """
                 UPDATE ssh_connections
-                SET host = ?, port = ?, username = ?, private_key_encrypted = ?, updated_at = datetime('now')
+                SET host = ?, port = ?, username = ?, auth_mode = ?, private_key_encrypted = ?, password_encrypted = ?, updated_at = datetime('now')
                 WHERE id = ? AND user_id = ?
                 """,
-                (clean_host, int(port), clean_username, private_key_encrypted, int(existing["id"]), user_id),
+                (
+                    clean_host,
+                    int(port),
+                    clean_username,
+                    auth_mode.strip(),
+                    key_value,
+                    password_encrypted,
+                    int(existing["id"]),
+                    user_id,
+                ),
             )
             conn.commit()
             return int(existing["id"])
         cur = conn.execute(
             """
-            INSERT INTO ssh_connections (user_id, name, host, port, username, private_key_encrypted)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO ssh_connections (user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, clean_name, clean_host, int(port), clean_username, private_key_encrypted),
+            (
+                user_id,
+                clean_name,
+                clean_host,
+                int(port),
+                clean_username,
+                auth_mode.strip(),
+                key_value,
+                password_encrypted,
+            ),
         )
         conn.commit()
         return int(cur.lastrowid)

@@ -429,7 +429,9 @@ class SshConnectionIn(BaseModel):
     host: str = Field(..., min_length=1, max_length=255)
     port: int = Field(default=22, ge=1, le=65535)
     username: str = Field(..., min_length=1, max_length=128)
-    private_key: str = Field(..., min_length=16, max_length=200_000)
+    auth_mode: str = Field(default="private_key", pattern="^(private_key|password|private_key_password)$")
+    private_key: str | None = Field(default=None, max_length=200_000)
+    password: str | None = Field(default=None, max_length=10_000)
 
 
 def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
@@ -439,6 +441,9 @@ def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
         "host": row.host,
         "port": row.port,
         "username": row.username,
+        "auth_mode": row.auth_mode,
+        "has_private_key": bool(row.private_key_encrypted),
+        "has_password": bool(row.password_encrypted),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -452,14 +457,29 @@ def ssh_connections_list(user: UserRow = Depends(get_current_user)) -> dict[str,
 
 @app.post("/api/connectivity/ssh")
 def ssh_connections_upsert(body: SshConnectionIn, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
-    enc = encrypt_api_key(body.private_key.strip())
+    auth_mode = body.auth_mode.strip()
+    private_key = (body.private_key or "").strip()
+    password = (body.password or "").strip()
+    if auth_mode == "private_key":
+        if not private_key:
+            raise HTTPException(status_code=400, detail="Private key is required for private_key mode.")
+    elif auth_mode == "password":
+        if not password:
+            raise HTTPException(status_code=400, detail="Password is required for password mode.")
+    elif auth_mode == "private_key_password":
+        if not private_key or not password:
+            raise HTTPException(status_code=400, detail="Private key and password are required for private_key_password mode.")
+    private_key_enc = encrypt_api_key(private_key) if private_key else None
+    password_enc = encrypt_api_key(password) if password else None
     cid = upsert_ssh_connection(
         user_id=user.id,
         name=body.name,
         host=body.host,
         port=body.port,
         username=body.username,
-        private_key_encrypted=enc,
+        auth_mode=auth_mode,
+        private_key_encrypted=private_key_enc,
+        password_encrypted=password_enc,
     )
     row = get_ssh_connection(user.id, cid)
     if row is None:
@@ -479,15 +499,22 @@ def ssh_connections_test(connection_id: int, user: UserRow = Depends(get_current
     row = get_ssh_connection(user.id, connection_id)
     if row is None:
         raise HTTPException(status_code=404, detail="SSH connection not found.")
+    key: str | None = None
+    password: str | None = None
     try:
-        key = decrypt_api_key(row.private_key_encrypted)
+        if row.private_key_encrypted:
+            key = decrypt_api_key(row.private_key_encrypted)
+        if row.password_encrypted:
+            password = decrypt_api_key(row.password_encrypted)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not decrypt SSH key: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"Could not decrypt SSH credential: {exc}") from exc
     result = run_ssh_command(
         host=row.host,
         port=row.port,
         username=row.username,
+        auth_mode=row.auth_mode,
         private_key=key,
+        password=password,
         command="echo connected",
         timeout_seconds=20,
     )

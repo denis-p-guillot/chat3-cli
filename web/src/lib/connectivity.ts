@@ -4,6 +4,9 @@ export type SshConnection = {
   host: string
   port: number
   username: string
+  auth_mode: 'private_key' | 'password' | 'private_key_password'
+  has_private_key: boolean
+  has_password: boolean
   created_at: string
   updated_at: string
 }
@@ -36,7 +39,9 @@ export async function saveSshConnection(body: {
   host: string
   port: number
   username: string
-  private_key: string
+  auth_mode: 'private_key' | 'password' | 'private_key_password'
+  private_key?: string
+  password?: string
 }): Promise<SshConnection> {
   const res = await fetch('/api/connectivity/ssh', {
     method: 'POST',

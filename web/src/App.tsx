@@ -122,6 +122,40 @@ function IconLogout({ className }: { className?: string }) {
   )
 }
 
+function IconAttach({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21.44 11.05l-8.49 8.49a5 5 0 11-7.07-7.07l9.19-9.19a3.5 3.5 0 114.95 4.95L10.48 17.8a2 2 0 11-2.83-2.83l7.78-7.78" />
+    </svg>
+  )
+}
+
+function IconRetry({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M20 11a8 8 0 10-2.34 5.66" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M20 4v7h-7" />
+    </svg>
+  )
+}
+
+function IconSend({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M22 2L11 13" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M22 2L15 22l-4-9-9-4 20-7z" />
+    </svg>
+  )
+}
+
+function IconStop({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <rect x="6.5" y="6.5" width="11" height="11" rx="2.2" />
+    </svg>
+  )
+}
+
 function buildApiPayload(messages: ChatMsg[]): ChatMessagePayload[] {
   const out: ChatMessagePayload[] = []
   for (const m of messages) {
@@ -391,7 +425,9 @@ function ChatSession({
     host: '',
     port: 22,
     username: '',
+    auth_mode: 'private_key' as 'private_key' | 'password' | 'private_key_password',
     private_key: '',
+    password: '',
   })
 
   useEffect(() => {
@@ -781,9 +817,11 @@ function ChatSession({
         host: sshForm.host.trim(),
         port: Number(sshForm.port) || 22,
         username: sshForm.username.trim(),
+        auth_mode: sshForm.auth_mode,
         private_key: sshForm.private_key,
+        password: sshForm.password,
       })
-      setSshForm((x) => ({ ...x, private_key: '' }))
+      setSshForm((x) => ({ ...x, private_key: '', password: '' }))
       await refreshSshConnections()
     } catch (err) {
       setSshErr(err instanceof Error ? err.message : String(err))
@@ -913,7 +951,7 @@ function ChatSession({
           )}
         </div>
 
-        <div className="sidebar-section">
+        <div className="sidebar-section sidebar-widget">
           <h2>Connectivity (SSH)</h2>
           <form className="ssh-form" onSubmit={(e) => void submitSsh(e)}>
             <input
@@ -947,13 +985,37 @@ function ChatSession({
                 placeholder="Port"
               />
             </div>
-            <textarea
-              value={sshForm.private_key}
-              onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
-              placeholder="Private key (PEM)"
-              rows={4}
-              required
-            />
+            <select
+              value={sshForm.auth_mode}
+              onChange={(e) =>
+                setSshForm((x) => ({
+                  ...x,
+                  auth_mode: e.target.value as 'private_key' | 'password' | 'private_key_password',
+                }))
+              }
+            >
+              <option value="private_key">Private key</option>
+              <option value="password">Password</option>
+              <option value="private_key_password">Private key + password</option>
+            </select>
+            {sshForm.auth_mode !== 'password' && (
+              <textarea
+                value={sshForm.private_key}
+                onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
+                placeholder="Private key (PEM)"
+                rows={4}
+                required
+              />
+            )}
+            {sshForm.auth_mode !== 'private_key' && (
+              <input
+                type="password"
+                value={sshForm.password}
+                onChange={(e) => setSshForm((x) => ({ ...x, password: e.target.value }))}
+                placeholder="Password"
+                required
+              />
+            )}
             <button type="submit" className="btn secondary" disabled={sshBusy}>
               Save connection
             </button>
@@ -967,6 +1029,9 @@ function ChatSession({
                     <strong>{c.name}</strong>
                     <span className="muted">
                       {c.username}@{c.host}:{c.port}
+                    </span>
+                    <span className="muted ssh-mode">
+                      {c.auth_mode === 'private_key' ? 'Key' : c.auth_mode === 'password' ? 'Password' : 'Key + Password'}
                     </span>
                   </div>
                   <div className="ssh-actions">
@@ -983,7 +1048,7 @@ function ChatSession({
           )}
         </div>
 
-        <div className="sidebar-section">
+        <div className="sidebar-section sidebar-widget">
           <h2>Environment</h2>
           {metaErr && <p className="warn">Could not load /api/meta ({metaErr}). Is the API running?</p>}
           {meta && (
@@ -1269,46 +1334,54 @@ function ChatSession({
               ))}
             </ul>
           )}
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={
-              historyHydrated ? 'Message… (Enter to send, Shift+Enter for newline)' : 'Loading saved conversation…'
-            }
-            rows={3}
-            disabled={busy || !historyHydrated}
-            aria-label="Message"
-          />
-          <div className="composer-actions">
-            <button
-              type="button"
-              className="btn secondary attach-btn"
-              onClick={() => fileInputRef.current?.click()}
+          <div className="composer-row">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder={
+                historyHydrated ? 'Message… (Enter to send, Shift+Enter for newline)' : 'Loading saved conversation…'
+              }
+              rows={3}
               disabled={busy || !historyHydrated}
-              title="Choose files (hold Cmd on Mac or Ctrl on Windows to select several). You can also drag files here."
-              aria-label="Attach one or more files"
-            >
-              Attach files
-            </button>
-            <button
-              type="button"
-              className="btn secondary retry-btn"
-              onClick={() => void retry()}
-              disabled={!canRetry}
-              title="Drop assistant/tool replies after the last user message and run the model again"
-            >
-              Retry
-            </button>
-            {busy ? (
-              <button type="button" className="btn stop-btn" onClick={stop} aria-label="Stop generation">
-                Stop
-              </button>
-            ) : (
-              <button type="button" className="btn primary" onClick={() => void send()} disabled={!canSend}>
-                Send
-              </button>
-            )}
+              aria-label="Message"
+            />
+            <div className="composer-actions">
+              <div className="composer-secondary-col">
+                <button
+                  type="button"
+                  className="btn secondary attach-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={busy || !historyHydrated}
+                  title="Choose files (hold Cmd on Mac or Ctrl on Windows to select several). You can also drag files here."
+                  aria-label="Attach one or more files"
+                >
+                  <IconAttach className="composer-btn-icon" />
+                  <span>Attach</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary retry-btn"
+                  onClick={() => void retry()}
+                  disabled={!canRetry}
+                  title="Drop assistant/tool replies after the last user message and run the model again"
+                >
+                  <IconRetry className="composer-btn-icon" />
+                  <span>Retry</span>
+                </button>
+              </div>
+              {busy ? (
+                <button type="button" className="btn stop-btn" onClick={stop} aria-label="Stop generation">
+                  <IconStop className="composer-btn-icon" />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button type="button" className="btn primary" onClick={() => void send()} disabled={!canSend}>
+                  <IconSend className="composer-btn-icon" />
+                  <span>Send</span>
+                </button>
+              )}
+            </div>
           </div>
         </footer>
       </main>

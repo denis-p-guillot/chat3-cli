@@ -32,7 +32,7 @@ Heavy lifting (reading whole files, searching repos, parsing archives) happens o
 
 Your strengths are to arbitrate options, orchestrate tools, and bring insight: plan steps, interpret tool output, compare approaches, and explain tradeoffs.
 
-You have access to filesystem tools, git tools, archive list/extract (tar and zip), grep_files for log search, fs_read_file_chunk for large files, and fs_stat for file metadata.
+You have access to filesystem tools, git tools, archive list/extract (tar and zip), grep_files for log search, fs_read_file_chunk for large files, fs_stat for file metadata, and per-user SSH connectivity tools.
 
 Allowed roots:
 - workspace
@@ -1239,16 +1239,23 @@ def ssh_exec(connection_name: str, command: str, timeout_seconds: int) -> str:
     conn = get_ssh_connection_by_name(user_id, connection_name.strip())
     if conn is None:
         return json_result(ok=False, error=f"SSH connection not found: {connection_name}")
+    private_key: str | None = None
+    password: str | None = None
     try:
-        private_key = decrypt_api_key(conn.private_key_encrypted)
+        if conn.private_key_encrypted:
+            private_key = decrypt_api_key(conn.private_key_encrypted)
+        if conn.password_encrypted:
+            password = decrypt_api_key(conn.password_encrypted)
     except Exception as exc:
-        return json_result(ok=False, error=f"Could not decrypt SSH private key: {exc}")
+        return json_result(ok=False, error=f"Could not decrypt SSH credential: {exc}")
 
     result = run_ssh_command(
         host=conn.host,
         port=conn.port,
         username=conn.username,
+        auth_mode=conn.auth_mode,
         private_key=private_key,
+        password=password,
         command=command,
         timeout_seconds=max(1, min(int(timeout_seconds), 600)),
     )
@@ -1261,6 +1268,30 @@ def ssh_exec(connection_name: str, command: str, timeout_seconds: int) -> str:
         stdout=result.get("stdout", ""),
         stderr=result.get("stderr", ""),
         returncode=result.get("returncode"),
+    )
+
+
+def ssh_list_connections() -> str:
+    """List saved SSH connection profiles for the active authenticated user."""
+    user_id = active_workspace_user_id()
+    if user_id is None:
+        return json_result(ok=False, error="No authenticated user context for SSH connectivity.")
+    from user_db import list_ssh_connections
+
+    rows = list_ssh_connections(user_id)
+    return json_result(
+        ok=True,
+        count=len(rows),
+        connections=[
+            {
+                "name": r.name,
+                "host": r.host,
+                "port": r.port,
+                "username": r.username,
+                "auth_mode": r.auth_mode,
+            }
+            for r in rows
+        ],
     )
 
 
@@ -1592,6 +1623,18 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "type": "function",
+        "name": "ssh_list_connections",
+        "description": "List saved SSH connections for the current authenticated user.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "ssh_exec",
         "description": "Run a shell command over SSH using a saved connection profile for the active user.",
         "strict": True,
@@ -1648,6 +1691,8 @@ def call_function(name: str, args: dict[str, Any]) -> str:
         return git_checkout_branch(**args)
     if name == "git_commit_all":
         return git_commit_all(**args)
+    if name == "ssh_list_connections":
+        return ssh_list_connections(**args)
     if name == "ssh_exec":
         return ssh_exec(**args)
 
