@@ -66,6 +66,7 @@ WORKSPACE_DIR = BASE_DIR / "workspace"
 
 # Per-workspace tool root: workspace/users/<id>/ (CLI default id: CHAT3_WORKSPACE_ID or "local").
 _workspace_root_ctx: ContextVar[Path | None] = ContextVar("_workspace_root_ctx", default=None)
+_workspace_user_id_ctx: ContextVar[int | None] = ContextVar("_workspace_user_id_ctx", default=None)
 
 ALLOWED_ROOTS: dict[str, Path] = {
     "base_dir": BASE_DIR,
@@ -112,10 +113,17 @@ def workspace_session(user_id: int, workspace_id: int):
     """Scope filesystem tools to workspace/users/<user_id>/w/<workspace_id>/ (HTTP agent turns)."""
     root = ensure_named_workspace_layout(user_id, workspace_id)
     token = _workspace_root_ctx.set(root)
+    user_token = _workspace_user_id_ctx.set(int(user_id))
     try:
         yield root
     finally:
+        _workspace_user_id_ctx.reset(user_token)
         _workspace_root_ctx.reset(token)
+
+
+def active_workspace_user_id() -> int | None:
+    """Current authenticated user id for HTTP-scoped agent turns."""
+    return _workspace_user_id_ctx.get()
 
 
 def migrate_legacy_user_data_to_named_workspace(user_id: int, workspace_id: int) -> None:
@@ -1218,6 +1226,44 @@ def git_commit_all(
     )
 
 
+def ssh_exec(connection_name: str, command: str, timeout_seconds: int) -> str:
+    """Execute a command on a saved SSH connection for the active user."""
+    user_id = active_workspace_user_id()
+    if user_id is None:
+        return json_result(ok=False, error="No authenticated user context for SSH execution.")
+
+    from user_crypto import decrypt_api_key
+    from user_db import get_ssh_connection_by_name
+    from ssh_exec import run_ssh_command
+
+    conn = get_ssh_connection_by_name(user_id, connection_name.strip())
+    if conn is None:
+        return json_result(ok=False, error=f"SSH connection not found: {connection_name}")
+    try:
+        private_key = decrypt_api_key(conn.private_key_encrypted)
+    except Exception as exc:
+        return json_result(ok=False, error=f"Could not decrypt SSH private key: {exc}")
+
+    result = run_ssh_command(
+        host=conn.host,
+        port=conn.port,
+        username=conn.username,
+        private_key=private_key,
+        command=command,
+        timeout_seconds=max(1, min(int(timeout_seconds), 600)),
+    )
+    return json_result(
+        ok=result.get("ok", False),
+        connection=conn.name,
+        host=conn.host,
+        port=conn.port,
+        username=conn.username,
+        stdout=result.get("stdout", ""),
+        stderr=result.get("stderr", ""),
+        returncode=result.get("returncode"),
+    )
+
+
 TOOLS: list[dict[str, Any]] = [
     {
         "type": "function",
@@ -1544,6 +1590,22 @@ TOOLS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "ssh_exec",
+        "description": "Run a shell command over SSH using a saved connection profile for the active user.",
+        "strict": True,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "connection_name": {"type": "string"},
+                "command": {"type": "string"},
+                "timeout_seconds": {"type": "integer"},
+            },
+            "required": ["connection_name", "command", "timeout_seconds"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 
@@ -1586,6 +1648,8 @@ def call_function(name: str, args: dict[str, Any]) -> str:
         return git_checkout_branch(**args)
     if name == "git_commit_all":
         return git_commit_all(**args)
+    if name == "ssh_exec":
+        return ssh_exec(**args)
 
     return json_result(ok=False, error=f"Unknown function: {name}")
 

@@ -33,6 +33,13 @@ import {
   type WorkspaceSummary,
 } from './lib/workspaces'
 import { fetchWorkspaceFiles, type WorkspaceEntry } from './lib/workspaceFiles'
+import {
+  deleteSshConnection,
+  listSshConnections,
+  saveSshConnection,
+  testSshConnection,
+  type SshConnection,
+} from './lib/connectivity'
 import './App.css'
 
 const WORKSPACE_PATH_DRAG_TYPE = 'application/x-purplecloud-workspace-path'
@@ -376,6 +383,16 @@ function ChatSession({
   const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
   const [workspaceSearch, setWorkspaceSearch] = useState('')
   const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
+  const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
+  const [sshBusy, setSshBusy] = useState(false)
+  const [sshErr, setSshErr] = useState<string | null>(null)
+  const [sshForm, setSshForm] = useState({
+    name: '',
+    host: '',
+    port: 22,
+    username: '',
+    private_key: '',
+  })
 
   useEffect(() => {
     fetch('/api/meta', { credentials: 'include' })
@@ -389,6 +406,23 @@ function ChatSession({
       .then((d) => setWorkspaceList(d.workspaces))
       .catch(() => setWorkspaceList([]))
   }, [me.id, me.active_workspace_id])
+
+  const refreshSshConnections = async () => {
+    setSshBusy(true)
+    setSshErr(null)
+    try {
+      setSshConnections(await listSshConnections())
+    } catch (e) {
+      setSshErr(e instanceof Error ? e.message : String(e))
+      setSshConnections([])
+    } finally {
+      setSshBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    void refreshSshConnections()
+  }, [me.id])
 
   const refreshWorkspaceFiles = async () => {
     setWorkspaceFilesBusy(true)
@@ -737,6 +771,54 @@ function ChatSession({
     }
   }
 
+  const submitSsh = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSshErr(null)
+    setSshBusy(true)
+    try {
+      await saveSshConnection({
+        name: sshForm.name.trim(),
+        host: sshForm.host.trim(),
+        port: Number(sshForm.port) || 22,
+        username: sshForm.username.trim(),
+        private_key: sshForm.private_key,
+      })
+      setSshForm((x) => ({ ...x, private_key: '' }))
+      await refreshSshConnections()
+    } catch (err) {
+      setSshErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSshBusy(false)
+    }
+  }
+
+  const removeSsh = async (id: number) => {
+    if (busy) return
+    try {
+      await deleteSshConnection(id)
+      await refreshSshConnections()
+    } catch (err) {
+      setSshErr(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const testSsh = async (id: number) => {
+    setSshErr(null)
+    setSshBusy(true)
+    try {
+      const res = await testSshConnection(id)
+      if (res.ok) {
+        alert(`SSH test successful.\n${res.stdout || '(no output)'}`)
+      } else {
+        alert(`SSH test failed.\n${res.stderr || '(no error output)'}`)
+      }
+    } catch (err) {
+      setSshErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSshBusy(false)
+    }
+  }
+
   const live = busy ? streamRef.current : null
   const execStatusText = (() => {
     if (!busy) return ''
@@ -828,6 +910,76 @@ function ChatSession({
           </button>
           {!me.has_openai_key && (
             <p className="warn">Add your OpenAI API key in Settings before sending messages.</p>
+          )}
+        </div>
+
+        <div className="sidebar-section">
+          <h2>Connectivity (SSH)</h2>
+          <form className="ssh-form" onSubmit={(e) => void submitSsh(e)}>
+            <input
+              value={sshForm.name}
+              onChange={(e) => setSshForm((x) => ({ ...x, name: e.target.value }))}
+              placeholder="Connection name (e.g. prod)"
+              required
+              maxLength={128}
+            />
+            <input
+              value={sshForm.host}
+              onChange={(e) => setSshForm((x) => ({ ...x, host: e.target.value }))}
+              placeholder="Host (e.g. server.example.com)"
+              required
+              maxLength={255}
+            />
+            <div className="ssh-inline">
+              <input
+                value={sshForm.username}
+                onChange={(e) => setSshForm((x) => ({ ...x, username: e.target.value }))}
+                placeholder="Username"
+                required
+                maxLength={128}
+              />
+              <input
+                type="number"
+                value={sshForm.port}
+                onChange={(e) => setSshForm((x) => ({ ...x, port: Number(e.target.value) || 22 }))}
+                min={1}
+                max={65535}
+                placeholder="Port"
+              />
+            </div>
+            <textarea
+              value={sshForm.private_key}
+              onChange={(e) => setSshForm((x) => ({ ...x, private_key: e.target.value }))}
+              placeholder="Private key (PEM)"
+              rows={4}
+              required
+            />
+            <button type="submit" className="btn secondary" disabled={sshBusy}>
+              Save connection
+            </button>
+          </form>
+          {sshErr && <p className="warn">{sshErr}</p>}
+          {sshConnections.length > 0 && (
+            <ul className="ssh-list">
+              {sshConnections.map((c) => (
+                <li key={c.id}>
+                  <div className="ssh-line">
+                    <strong>{c.name}</strong>
+                    <span className="muted">
+                      {c.username}@{c.host}:{c.port}
+                    </span>
+                  </div>
+                  <div className="ssh-actions">
+                    <button type="button" className="workspace-refresh-btn" onClick={() => void testSsh(c.id)} disabled={sshBusy}>
+                      Test
+                    </button>
+                    <button type="button" className="workspace-refresh-btn" onClick={() => void removeSsh(c.id)} disabled={sshBusy}>
+                      Delete
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
 
@@ -943,12 +1095,6 @@ function ChatSession({
           </button>
         </div>
 
-        <p className="hint">
-          Each <strong>workspace</strong> has its own folder: <code>workspace/users/&lt;you&gt;/w/&lt;workspace&gt;/</code>{' '}
-          with <code>uploads/</code>, <code>storage/</code>, and <code>chat_messages.json</code>. Switch workspaces in the
-          sidebar. Tools use the active workspace root; <strong>base_dir</strong> is the app root. OpenAI key:{' '}
-          <strong>Settings</strong>.
-        </p>
         <p className="brand-footer">
           <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">
             PurpleCloud

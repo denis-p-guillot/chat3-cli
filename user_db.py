@@ -29,6 +29,19 @@ class WorkspaceRow:
     created_at: str
 
 
+@dataclass
+class SshConnectionRow:
+    id: int
+    user_id: int
+    name: str
+    host: str
+    port: int
+    username: str
+    private_key_encrypted: str
+    created_at: str
+    updated_at: str
+
+
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
@@ -52,6 +65,23 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in cur.fetchall()}
     if "active_workspace_id" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN active_workspace_id INTEGER")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ssh_connections (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            host TEXT NOT NULL,
+            port INTEGER NOT NULL DEFAULT 22,
+            username TEXT NOT NULL,
+            private_key_encrypted TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, name)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_ssh_connections_user ON ssh_connections(user_id)")
 
 
 def init_db() -> None:
@@ -260,5 +290,124 @@ def ensure_user_workspaces_ready(user_id: int) -> int:
             conn.commit()
             return ws_ids[0]
         return int(active)
+    finally:
+        conn.close()
+
+
+def _ssh_row_from_row(row: sqlite3.Row) -> SshConnectionRow:
+    return SshConnectionRow(
+        id=row["id"],
+        user_id=row["user_id"],
+        name=row["name"] or "",
+        host=row["host"] or "",
+        port=int(row["port"] or 22),
+        username=row["username"] or "",
+        private_key_encrypted=row["private_key_encrypted"] or "",
+        created_at=row["created_at"] or "",
+        updated_at=row["updated_at"] or "",
+    )
+
+
+def list_ssh_connections(user_id: int) -> list[SshConnectionRow]:
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            FROM ssh_connections
+            WHERE user_id = ?
+            ORDER BY lower(name), id
+            """,
+            (user_id,),
+        )
+        return [_ssh_row_from_row(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def get_ssh_connection(user_id: int, connection_id: int) -> SshConnectionRow | None:
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            FROM ssh_connections
+            WHERE user_id = ? AND id = ?
+            """,
+            (user_id, connection_id),
+        )
+        row = cur.fetchone()
+        return _ssh_row_from_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_ssh_connection_by_name(user_id: int, name: str) -> SshConnectionRow | None:
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, user_id, name, host, port, username, private_key_encrypted, created_at, updated_at
+            FROM ssh_connections
+            WHERE user_id = ? AND name = ?
+            """,
+            (user_id, name.strip()),
+        )
+        row = cur.fetchone()
+        return _ssh_row_from_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def upsert_ssh_connection(
+    user_id: int,
+    name: str,
+    host: str,
+    port: int,
+    username: str,
+    private_key_encrypted: str,
+) -> int:
+    clean_name = name.strip()[:128]
+    clean_host = host.strip()[:255]
+    clean_username = username.strip()[:128]
+    conn = _connect()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM ssh_connections WHERE user_id = ? AND name = ?",
+            (user_id, clean_name),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE ssh_connections
+                SET host = ?, port = ?, username = ?, private_key_encrypted = ?, updated_at = datetime('now')
+                WHERE id = ? AND user_id = ?
+                """,
+                (clean_host, int(port), clean_username, private_key_encrypted, int(existing["id"]), user_id),
+            )
+            conn.commit()
+            return int(existing["id"])
+        cur = conn.execute(
+            """
+            INSERT INTO ssh_connections (user_id, name, host, port, username, private_key_encrypted)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, clean_name, clean_host, int(port), clean_username, private_key_encrypted),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def delete_ssh_connection(user_id: int, connection_id: int) -> bool:
+    conn = _connect()
+    try:
+        cur = conn.execute(
+            "DELETE FROM ssh_connections WHERE user_id = ? AND id = ?",
+            (user_id, connection_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
     finally:
         conn.close()

@@ -851,6 +851,65 @@
   flex-shrink: 0;
 }
 
+.ssh-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+}
+
+.ssh-form input,
+.ssh-form textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 0.35rem 0.45rem;
+}
+
+.ssh-form textarea {
+  font-family: var(--mono);
+  resize: vertical;
+}
+
+.ssh-inline {
+  display: grid;
+  grid-template-columns: 1fr 92px;
+  gap: 0.35rem;
+}
+
+.ssh-list {
+  list-style: none;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ssh-list li {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.18);
+  padding: 0.35rem 0.45rem;
+}
+
+.ssh-line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.76rem;
+}
+
+.ssh-actions {
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 0.35rem;
+}
+
 .workspace-link-btn {
   border: 1px solid var(--border);
   background: var(--surface);

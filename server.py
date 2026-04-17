@@ -59,16 +59,23 @@ from chat3 import (
     workspace_session,
 )
 from local_file_analysis import analyze_workspace_file
+from ssh_exec import run_ssh_command
+from user_crypto import decrypt_api_key, encrypt_api_key
 from user_db import (
     UserRow,
+    SshConnectionRow,
     WorkspaceRow,
     create_workspace,
+    delete_ssh_connection,
     ensure_user_workspaces_ready,
     get_user_by_id,
+    get_ssh_connection,
     get_workspace,
     init_db,
+    list_ssh_connections,
     list_workspaces,
     set_active_workspace,
+    upsert_ssh_connection,
 )
 
 app = FastAPI(title="PurpleCloud Brain AI", version="1.0.0")
@@ -415,6 +422,81 @@ def workspace_files(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_use
 
 class CreateWorkspaceBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
+
+
+class SshConnectionIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    host: str = Field(..., min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(..., min_length=1, max_length=128)
+    private_key: str = Field(..., min_length=16, max_length=200_000)
+
+
+def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "name": row.name,
+        "host": row.host,
+        "port": row.port,
+        "username": row.username,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+@app.get("/api/connectivity/ssh")
+def ssh_connections_list(user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    rows = list_ssh_connections(user.id)
+    return {"connections": [_ssh_row_to_public(r) for r in rows]}
+
+
+@app.post("/api/connectivity/ssh")
+def ssh_connections_upsert(body: SshConnectionIn, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    enc = encrypt_api_key(body.private_key.strip())
+    cid = upsert_ssh_connection(
+        user_id=user.id,
+        name=body.name,
+        host=body.host,
+        port=body.port,
+        username=body.username,
+        private_key_encrypted=enc,
+    )
+    row = get_ssh_connection(user.id, cid)
+    if row is None:
+        raise HTTPException(status_code=500, detail="Could not read saved SSH connection.")
+    return {"connection": _ssh_row_to_public(row)}
+
+
+@app.delete("/api/connectivity/ssh/{connection_id}")
+def ssh_connections_delete(connection_id: int, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    if not delete_ssh_connection(user.id, connection_id):
+        raise HTTPException(status_code=404, detail="SSH connection not found.")
+    return {"status": "ok"}
+
+
+@app.post("/api/connectivity/ssh/{connection_id}/test")
+def ssh_connections_test(connection_id: int, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    row = get_ssh_connection(user.id, connection_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="SSH connection not found.")
+    try:
+        key = decrypt_api_key(row.private_key_encrypted)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Could not decrypt SSH key: {exc}") from exc
+    result = run_ssh_command(
+        host=row.host,
+        port=row.port,
+        username=row.username,
+        private_key=key,
+        command="echo connected",
+        timeout_seconds=20,
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "stdout": result.get("stdout", ""),
+        "stderr": result.get("stderr", ""),
+        "returncode": result.get("returncode"),
+    }
 
 
 @app.get("/api/workspaces")
