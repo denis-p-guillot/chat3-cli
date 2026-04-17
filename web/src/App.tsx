@@ -171,6 +171,17 @@ function IconStop({ className }: { className?: string }) {
   )
 }
 
+function IconClear({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 6h18" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 6V4.8A1.8 1.8 0 019.8 3h4.4A1.8 1.8 0 0116 4.8V6" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M6.8 6l.8 13.2A2 2 0 009.6 21h4.8a2 2 0 001.99-1.8L17.2 6" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M10 10.2v6.2M14 10.2v6.2" />
+    </svg>
+  )
+}
+
 function IconToolbox({ className }: { className?: string }) {
   return (
     <svg
@@ -645,6 +656,9 @@ function ChatSession({
       )
 
       const fin = streamRef.current
+      if (fin.assistant) {
+        assistantOutput = fin.assistant
+      }
       streamRef.current = { tools: [] }
       setTick((x) => x + 1)
       setMessages((prev) => {
@@ -659,7 +673,6 @@ function ChatSession({
           })
         }
         if (fin.assistant) {
-          assistantOutput = fin.assistant
           next.push({ id: uid(), role: 'assistant', content: fin.assistant })
         }
         if (fin.error) {
@@ -671,6 +684,9 @@ function ChatSession({
       if (isAbortError(e)) {
         const abortReason = abortReasonRef.current
         const fin = streamRef.current
+        if (fin.assistant) {
+          assistantOutput = fin.assistant
+        }
         streamRef.current = { tools: [] }
         setTick((x) => x + 1)
         setMessages((prev) => {
@@ -698,7 +714,6 @@ function ChatSession({
               content: `**Error:** ${fin.error}\n\n_(stopped)_`,
             })
           } else if (fin.assistant) {
-            assistantOutput = fin.assistant
             next.push({
               id: uid(),
               role: 'assistant',
@@ -1237,17 +1252,6 @@ function ChatSession({
           formatSize={formatSize}
         />
 
-        <div className="sidebar-actions">
-          <button
-            type="button"
-            className="btn secondary"
-            onClick={clear}
-            disabled={busy || !historyHydrated || messages.length === 0}
-          >
-            Clear conversation
-          </button>
-        </div>
-
         <p className="brand-footer">
           <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">
             PurpleCloud
@@ -1482,6 +1486,17 @@ function ChatSession({
                 >
                   <IconRetry className="composer-btn-icon" />
                   <span>Retry</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary clear-btn"
+                  onClick={clear}
+                  disabled={busy || !historyHydrated || messages.length === 0}
+                  title="Clear conversation"
+                  aria-label="Clear conversation"
+                >
+                  <IconClear className="composer-btn-icon" />
+                  <span>Clear</span>
                 </button>
               </div>
               {busy ? (

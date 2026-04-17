@@ -590,12 +590,11 @@ def _render_issue_analysis_html(
       <p>No remote diagnostics were executed in this run.</p>
     </section>
 """
-    assistant_section = ""
-    if assistant_summary.strip():
-        assistant_section = f"""
+    normalized_assistant_summary = assistant_summary.strip() or "(No AI follow-up conclusions were captured for this run.)"
+    assistant_section = f"""
     <section class="section">
       <h2>AI Follow-up Conclusions</h2>
-      <pre>{html.escape(assistant_summary.strip())}</pre>
+      <pre>{html.escape(normalized_assistant_summary)}</pre>
     </section>
 """
     return f"""<!DOCTYPE html>
@@ -1578,13 +1577,38 @@ def tools_diagnose_error_render_report(
         if not attached and not activity:
             raise HTTPException(status_code=400, detail="Saved diagnose state is empty.")
 
+    assistant_summary = (body.assistant_summary or "").strip()
+    if not assistant_summary:
+        # Fallback: pull latest assistant message from persisted chat history.
+        chat_path = _chat_messages_path(user.id, ws_id)
+        try:
+            if chat_path.exists():
+                raw = json.loads(chat_path.read_text(encoding="utf-8"))
+                msgs = raw.get("messages", []) if isinstance(raw, dict) else []
+                if isinstance(msgs, list):
+                    for m in reversed(msgs):
+                        if not isinstance(m, dict):
+                            continue
+                        if m.get("role") != "assistant":
+                            continue
+                        content = str(m.get("content", "")).strip()
+                        if not content:
+                            continue
+                        if content.startswith("**Error:**"):
+                            continue
+                        assistant_summary = content
+                        break
+        except Exception:
+            # Keep empty summary; report renderer will show fallback text.
+            pass
+
     rendered = _write_issue_analysis_report(
         context,
         user.id,
         ws_id,
         attached,
         activity,
-        body.assistant_summary,
+        assistant_summary,
     )
     return {"status": "ok", "path": rendered["path"], "name": rendered["name"], "activity": rendered["activity"]}
 
