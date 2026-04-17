@@ -29,6 +29,8 @@ Development (two terminals):
    ./run_api.sh
    ```
 
+   Re-run the same command anytime to **restart** the API: it frees port `8787` first, then starts uvicorn (avoids “address already in use”). Override the port with `PORT=9000 ./run_api.sh` if needed.
+
 2. Vite dev server (proxies `/api` to the API):
 
    ```bash
