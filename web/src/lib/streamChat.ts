@@ -12,15 +12,30 @@ export type ChatMessagePayload = {
   workspace_files?: string[]
 }
 
+export type StreamChatOptions = {
+  /** When aborted, fetch/read rejects with AbortError; caller should treat as user stop. */
+  signal?: AbortSignal
+}
+
+export function isAbortError(e: unknown): boolean {
+  return (
+    (e instanceof DOMException && e.name === 'AbortError') ||
+    (e instanceof Error && e.name === 'AbortError')
+  )
+}
+
 export async function streamChat(
   messages: ChatMessagePayload[],
   onEvent: (ev: StreamEvent) => void,
+  options?: StreamChatOptions,
 ): Promise<void> {
+  const { signal } = options ?? {}
   const res = await fetch('/api/chat/stream', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({ messages }),
+    signal,
   })
   if (!res.ok) {
     let detail = res.statusText

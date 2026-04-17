@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import queue
 import secrets
-from collections.abc import Iterator
+import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -270,7 +273,7 @@ def put_chat_history(
 
 
 @app.post("/api/chat/stream")
-def chat_stream(
+async def chat_stream(
     body: ChatBody,
     ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
 ) -> StreamingResponse:
@@ -285,22 +288,40 @@ def chat_stream(
         )
     client = OpenAI(api_key=key)
 
-    def event_stream() -> Iterator[bytes]:
-        with workspace_session(user.id, ws_id):
+    # Starlette runs *sync* StreamingResponse iterators in a thread pool; successive next() calls
+    # can use different threads, so ContextVar tokens from workspace_session() break on exit.
+    # Run the whole turn in one dedicated thread and bridge with a queue.
+    async def event_stream() -> AsyncIterator[bytes]:
+        q: queue.Queue[bytes | None] = queue.Queue()
+
+        def worker() -> None:
             try:
-                history = prepare_history(body, user.id)
-            except Exception as exc:
-                err = {"type": "error", "message": f"Could not prepare messages: {exc}"}
-                yield f"data: {json.dumps(err)}\n\n".encode("utf-8")
-                yield f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8")
-                return
-            try:
-                for ev in iter_agent_turn(client, history):
-                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8")
-                yield f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8")
-            except Exception as exc:
-                err = {"type": "error", "message": str(exc)}
-                yield f"data: {json.dumps(err)}\n\n".encode("utf-8")
+                with workspace_session(user.id, ws_id):
+                    try:
+                        history = prepare_history(body, user.id)
+                    except Exception as exc:
+                        err = {"type": "error", "message": f"Could not prepare messages: {exc}"}
+                        q.put(f"data: {json.dumps(err)}\n\n".encode("utf-8"))
+                        q.put(f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8"))
+                        return
+                    try:
+                        for ev in iter_agent_turn(client, history):
+                            q.put(
+                                f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8")
+                            )
+                        q.put(f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8"))
+                    except Exception as exc:
+                        err = {"type": "error", "message": str(exc)}
+                        q.put(f"data: {json.dumps(err)}\n\n".encode("utf-8"))
+            finally:
+                q.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+        while True:
+            chunk = await asyncio.to_thread(q.get)
+            if chunk is None:
+                break
+            yield chunk
 
     return StreamingResponse(
         event_stream(),

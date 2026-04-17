@@ -24,7 +24,7 @@ import {
   saveChatHistory,
   serializeChatMessages,
 } from './lib/chatStorage'
-import { streamChat, type ChatMessagePayload } from './lib/streamChat'
+import { isAbortError, streamChat, type ChatMessagePayload } from './lib/streamChat'
 import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import {
   activateWorkspace,
@@ -84,6 +84,19 @@ function buildApiPayload(messages: ChatMsg[]): ChatMessagePayload[] {
     }
   }
   return out
+}
+
+/** True when the last turn can be re-run (failed, stopped, or incomplete). */
+function canRetryFromMessages(msgs: ChatMsg[]): boolean {
+  if (msgs.length === 0) return false
+  const last = msgs[msgs.length - 1]
+  if (last.role === 'assistant') {
+    const c = last.content
+    return c.startsWith('**Error:**') || c.includes('_(stopped)_')
+  }
+  if (last.role === 'user') return true
+  if (last.role === 'tool') return true
+  return false
 }
 
 function AuthPanel({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
@@ -305,6 +318,7 @@ function ChatSession({
   const streamRef = useRef<{ tools: ToolRow[]; assistant?: string; error?: string }>({
     tools: [],
   })
+  const abortRef = useRef<AbortController | null>(null)
   const threadRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [historyHydrated, setHistoryHydrated] = useState(false)
@@ -363,6 +377,102 @@ function ChatSession({
     })
     return () => cancelAnimationFrame(id)
   }, [messages, busy, tick])
+
+  const runStream = async (payload: ChatMessagePayload[]) => {
+    const ac = new AbortController()
+    abortRef.current = ac
+    setBusy(true)
+    streamRef.current = { tools: [] }
+    try {
+      await streamChat(
+        payload,
+        (ev) => {
+          const s = streamRef.current
+          if (ev.type === 'tool_call') {
+            s.tools.push({ name: ev.name, args: ev.arguments, output: undefined })
+          } else if (ev.type === 'tool_result') {
+            for (let i = s.tools.length - 1; i >= 0; i--) {
+              if (s.tools[i].name === ev.name && s.tools[i].output === undefined) {
+                s.tools[i] = { ...s.tools[i], output: ev.output }
+                break
+              }
+            }
+          } else if (ev.type === 'assistant') {
+            s.assistant = ev.content
+          } else if (ev.type === 'error') {
+            s.error = ev.message
+          }
+          setTick((x) => x + 1)
+        },
+        { signal: ac.signal },
+      )
+
+      const fin = streamRef.current
+      streamRef.current = { tools: [] }
+      setTick((x) => x + 1)
+      setMessages((prev) => {
+        const next = [...prev]
+        for (const t of fin.tools) {
+          next.push({
+            id: uid(),
+            role: 'tool',
+            name: t.name,
+            args: t.args,
+            output: t.output ?? '',
+          })
+        }
+        if (fin.assistant) {
+          next.push({ id: uid(), role: 'assistant', content: fin.assistant })
+        }
+        if (fin.error) {
+          next.push({ id: uid(), role: 'assistant', content: `**Error:** ${fin.error}` })
+        }
+        return next
+      })
+    } catch (e) {
+      if (isAbortError(e)) {
+        const fin = streamRef.current
+        streamRef.current = { tools: [] }
+        setTick((x) => x + 1)
+        setMessages((prev) => {
+          const next = [...prev]
+          for (const t of fin.tools) {
+            next.push({
+              id: uid(),
+              role: 'tool',
+              name: t.name,
+              args: t.args,
+              output: t.output ?? '',
+            })
+          }
+          if (fin.error) {
+            next.push({
+              id: uid(),
+              role: 'assistant',
+              content: `**Error:** ${fin.error}\n\n_(stopped)_`,
+            })
+          } else if (fin.assistant) {
+            next.push({
+              id: uid(),
+              role: 'assistant',
+              content: `${fin.assistant}\n\n_(stopped)_`,
+            })
+          } else {
+            next.push({ id: uid(), role: 'assistant', content: '_(stopped)_' })
+          }
+          return next
+        })
+      } else {
+        const msg = e instanceof Error ? e.message : String(e)
+        setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: `**Error:** ${msg}` }])
+      }
+    } finally {
+      setBusy(false)
+      abortRef.current = null
+      streamRef.current = { tools: [] }
+      setTick((x) => x + 1)
+    }
+  }
 
   const send = async () => {
     if (!historyHydrated) return
@@ -426,60 +536,26 @@ function ChatSession({
       },
     ])
 
-    setBusy(true)
-    streamRef.current = { tools: [] }
+    await runStream(payload)
+  }
 
-    try {
-      await streamChat(payload, (ev) => {
-        const s = streamRef.current
-        if (ev.type === 'tool_call') {
-          s.tools.push({ name: ev.name, args: ev.arguments, output: undefined })
-        } else if (ev.type === 'tool_result') {
-          for (let i = s.tools.length - 1; i >= 0; i--) {
-            if (s.tools[i].name === ev.name && s.tools[i].output === undefined) {
-              s.tools[i] = { ...s.tools[i], output: ev.output }
-              break
-            }
-          }
-        } else if (ev.type === 'assistant') {
-          s.assistant = ev.content
-        } else if (ev.type === 'error') {
-          s.error = ev.message
-        }
-        setTick((x) => x + 1)
-      })
+  const stop = () => {
+    abortRef.current?.abort()
+  }
 
-      const fin = streamRef.current
-      streamRef.current = { tools: [] }
-      setTick((x) => x + 1)
-      setMessages((prev) => {
-        const next = [...prev]
-        for (const t of fin.tools) {
-          next.push({
-            id: uid(),
-            role: 'tool',
-            name: t.name,
-            args: t.args,
-            output: t.output ?? '',
-          })
-        }
-        if (fin.assistant) {
-          next.push({ id: uid(), role: 'assistant', content: fin.assistant })
-        }
-        if (fin.error) {
-          next.push({ id: uid(), role: 'assistant', content: `**Error:** ${fin.error}` })
-        }
-        return next
-      })
-
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: `**Error:** ${msg}` }])
-    } finally {
-      setBusy(false)
-      streamRef.current = { tools: [] }
-      setTick((x) => x + 1)
+  const retry = () => {
+    if (busy || !historyHydrated || !canRetryFromMessages(messages)) return
+    let lastUserIdx = -1
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') {
+        lastUserIdx = i
+        break
+      }
     }
+    if (lastUserIdx < 0) return
+    const trimmed = messages.slice(0, lastUserIdx + 1)
+    setMessages(trimmed)
+    void runStream(buildApiPayload(trimmed))
   }
 
   const clear = () => {
@@ -560,6 +636,7 @@ function ChatSession({
 
   const live = busy ? streamRef.current : null
   const canSend = historyHydrated && !busy && (input.trim().length > 0 || pendingFiles.length > 0)
+  const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
 
   return (
     <div className="app">
@@ -848,9 +925,24 @@ function ChatSession({
             >
               Attach files
             </button>
-            <button type="button" className="btn primary" onClick={() => void send()} disabled={!canSend}>
-              Send
+            <button
+              type="button"
+              className="btn secondary retry-btn"
+              onClick={() => void retry()}
+              disabled={!canRetry}
+              title="Drop assistant/tool replies after the last user message and run the model again"
+            >
+              Retry
             </button>
+            {busy ? (
+              <button type="button" className="btn stop-btn" onClick={stop} aria-label="Stop generation">
+                Stop
+              </button>
+            ) : (
+              <button type="button" className="btn primary" onClick={() => void send()} disabled={!canSend}>
+                Send
+              </button>
+            )}
           </div>
         </footer>
       </main>

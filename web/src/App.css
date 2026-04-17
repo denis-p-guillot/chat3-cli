@@ -503,10 +503,31 @@
   align-items: center;
   gap: 0.5rem;
   margin-top: 0.65rem;
+  flex-wrap: wrap;
+}
+
+.composer-actions .btn {
+  width: auto;
+  min-width: 4.5rem;
 }
 
 .attach-btn {
   margin-right: auto;
+}
+
+.retry-btn {
+  flex-shrink: 0;
+}
+
+.btn.stop-btn {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.btn.stop-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(248, 113, 113, 0.6);
 }
 
 .btn {
