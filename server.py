@@ -619,6 +619,31 @@ def _analyze_remote_text(nginx_logs: str, odoo_logs: str, pg_logs: str, pg_stats
     n_pg_err = _count(r"\b(error|fatal|panic|canceling statement)\b", pg_logs)
     if n_pg_err:
         findings.append(f"PostgreSQL logs contain {n_pg_err} error/fatal keywords in sampled lines.")
+    # Nginx latency/perf hints in common log formats (request_time / upstream_response_time)
+    nginx_req_times = [float(x) for x in re.findall(r"request_time[=:\s\"]+([0-9]+(?:\.[0-9]+)?)", nginx_logs, flags=re.I)]
+    nginx_upstream_times = [
+        float(x) for x in re.findall(r"upstream_response_time[=:\s\"]+([0-9]+(?:\.[0-9]+)?)", nginx_logs, flags=re.I)
+    ]
+    slow_req = [x for x in nginx_req_times if x >= 1.0]
+    slow_up = [x for x in nginx_upstream_times if x >= 1.0]
+    if slow_req:
+        findings.append(
+            f"Nginx shows {len(slow_req)} slow requests (>=1s) in sampled lines; max request_time is {max(slow_req):.3f}s."
+        )
+    if slow_up:
+        findings.append(
+            f"Nginx upstream latency appears elevated ({len(slow_up)} entries >=1s); max upstream_response_time is {max(slow_up):.3f}s."
+        )
+
+    # Odoo latency/perf hints
+    odoo_slow_keywords = _count(r"\b(slow|timeout|longpolling|worker.*busy|db.*slow|took\s+[0-9.]+s)\b", odoo_logs)
+    if odoo_slow_keywords:
+        findings.append(f"Odoo logs include {odoo_slow_keywords} performance-related indicators (slow/timeout/worker busy).")
+
+    # PostgreSQL latency/perf hints
+    pg_slow_lines = _count(r"\b(duration:\s*[0-9.]+\s*ms|statement timeout|temporary file|checkpoint)\b", pg_logs)
+    if pg_slow_lines:
+        findings.append(f"PostgreSQL logs show {pg_slow_lines} potential performance markers (duration/timeout/temp files/checkpoints).")
     pg_stats_l = pg_stats.lower()
     if "extension is not available" in pg_stats_l:
         findings.append("pg_stat_statements extension is not available on this server.")
@@ -626,6 +651,29 @@ def _analyze_remote_text(nginx_logs: str, odoo_logs: str, pg_logs: str, pg_stats
         findings.append("pg_stat_statements appears present but access is denied for the SSH user.")
     elif pg_stats and pg_stats not in {"(not found)", "(empty)"}:
         findings.append("pg_stat_statements returned top slow/expensive query summary.")
+        # Parse pg_stat_statements table-like output (tab-separated) and flag expensive totals/means.
+        expensive_rows = 0
+        mean_over_100ms = 0
+        for line in pg_stats.splitlines():
+            if not line.strip() or line.lower().startswith("queryid"):
+                continue
+            cols = line.split("\t")
+            if len(cols) < 4:
+                continue
+            # total_exec_time (new) or total_time (old) in col #3 ; mean in col #4
+            try:
+                total_ms = float(cols[2])
+                mean_ms = float(cols[3])
+            except ValueError:
+                continue
+            if total_ms >= 10_000:
+                expensive_rows += 1
+            if mean_ms >= 100:
+                mean_over_100ms += 1
+        if expensive_rows:
+            findings.append(f"pg_stat_statements shows {expensive_rows} query patterns with cumulative runtime >= 10s.")
+        if mean_over_100ms:
+            findings.append(f"pg_stat_statements shows {mean_over_100ms} query patterns with mean runtime >= 100ms.")
     if not findings:
         findings.append("No obvious high-signal errors detected in sampled logs.")
     return findings
