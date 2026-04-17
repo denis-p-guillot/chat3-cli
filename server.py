@@ -586,7 +586,14 @@ def _render_issue_analysis_html(
 
 
 def _extract_tagged(body: str, tag: str) -> str:
-    m = re.search(rf"===BEGIN_{re.escape(tag)}===\n(.*?)\n===END_{re.escape(tag)}===", body, flags=re.S)
+    # Accept both populated and empty tagged sections, with LF or CRLF line endings.
+    begin_pat = rf"===BEGIN_{re.escape(tag)}==="
+    end_pat = rf"===END_{re.escape(tag)}==="
+    m = re.search(
+        rf"{begin_pat}\s*\r?\n?(.*?)(?:\r?\n)?{end_pat}",
+        body,
+        flags=re.S,
+    )
     if not m:
         return "(not found)"
     return (m.group(1) or "").strip() or "(empty)"
@@ -606,8 +613,11 @@ def _analyze_remote_text(nginx_logs: str, odoo_logs: str, pg_logs: str, pg_stats
     n_pg_err = _count(r"\b(error|fatal|panic|canceling statement)\b", pg_logs)
     if n_pg_err:
         findings.append(f"PostgreSQL logs contain {n_pg_err} error/fatal keywords in sampled lines.")
-    if "pg_stat_statements extension is not available" in pg_stats.lower():
+    pg_stats_l = pg_stats.lower()
+    if "extension is not available" in pg_stats_l:
         findings.append("pg_stat_statements extension is not available on this server.")
+    elif "access is denied" in pg_stats_l or "permission denied" in pg_stats_l:
+        findings.append("pg_stat_statements appears present but access is denied for the SSH user.")
     elif pg_stats and pg_stats not in {"(not found)", "(empty)"}:
         findings.append("pg_stat_statements returned top slow/expensive query summary.")
     if not findings:
@@ -619,39 +629,70 @@ def _collect_remote_diagnostics(row: SshConnectionRow, key: str | None, password
     script = r"""
 set +e
 echo "===BEGIN_NGINX==="
-if [ -f /var/log/nginx/error.log ]; then
-  tail -n 200 /var/log/nginx/error.log 2>/dev/null
-elif [ -f /var/log/nginx/access.log ]; then
-  tail -n 200 /var/log/nginx/access.log 2>/dev/null
-else
-  (journalctl -u nginx -n 200 --no-pager 2>/dev/null || true)
+NGINX_OUT=""
+if [ -d /var/log/nginx ]; then
+  NGINX_OUT="$(tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log 2>/dev/null || true)"
 fi
+if [ -z "$NGINX_OUT" ]; then
+  NGINX_OUT="$(journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager 2>/dev/null || true)"
+fi
+if [ -z "$NGINX_OUT" ]; then
+  NGINX_OUT="$(sudo -n tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log 2>/dev/null || true)"
+fi
+if [ -z "$NGINX_OUT" ]; then
+  NGINX_OUT="$(sudo -n journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager 2>/dev/null || true)"
+fi
+printf "%s\n" "$NGINX_OUT"
 echo "===END_NGINX==="
 
 echo "===BEGIN_ODOO==="
-if [ -f /var/log/odoo/odoo.log ]; then
-  tail -n 250 /var/log/odoo/odoo.log 2>/dev/null
-elif [ -f /var/log/odoo.log ]; then
-  tail -n 250 /var/log/odoo.log 2>/dev/null
-else
-  (journalctl -u odoo -n 250 --no-pager 2>/dev/null || true)
+ODOO_OUT=""
+for f in /var/log/odoo/odoo.log /var/log/odoo/*.log /var/log/odoo.log /opt/odoo/log/*.log; do
+  if [ -f "$f" ]; then
+    ODOO_OUT="$(tail -n 250 "$f" 2>/dev/null || true)"
+    [ -n "$ODOO_OUT" ] && break
+  fi
+done
+if [ -z "$ODOO_OUT" ]; then
+  ODOO_OUT="$(journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager 2>/dev/null || true)"
 fi
+if [ -z "$ODOO_OUT" ]; then
+  ODOO_OUT="$(sudo -n journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager 2>/dev/null || true)"
+fi
+if [ -z "$ODOO_OUT" ]; then
+  ODOO_OUT="$(docker ps --format '{{.Names}}' 2>/dev/null | rg -i 'odoo' | head -n 1 | xargs -I{} docker logs --tail 250 {} 2>/dev/null || true)"
+fi
+printf "%s\n" "$ODOO_OUT"
 echo "===END_ODOO==="
 
 echo "===BEGIN_PGLOG==="
-if [ -f /var/log/postgresql/postgresql.log ]; then
-  tail -n 250 /var/log/postgresql/postgresql.log 2>/dev/null
-elif [ -d /var/log/postgresql ]; then
-  tail -n 250 /var/log/postgresql/*.log 2>/dev/null
-else
-  (journalctl -u postgresql -n 250 --no-pager 2>/dev/null || true)
+PGLOG_OUT=""
+if [ -d /var/log/postgresql ]; then
+  PGLOG_OUT="$(tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null || true)"
 fi
+if [ -z "$PGLOG_OUT" ]; then
+  PGLOG_OUT="$(journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager 2>/dev/null || true)"
+fi
+if [ -z "$PGLOG_OUT" ]; then
+  PGLOG_OUT="$(sudo -n tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null || true)"
+fi
+if [ -z "$PGLOG_OUT" ]; then
+  PGLOG_OUT="$(sudo -n journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager 2>/dev/null || true)"
+fi
+printf "%s\n" "$PGLOG_OUT"
 echo "===END_PGLOG==="
 
 echo "===BEGIN_PGSTATS==="
 if command -v psql >/dev/null 2>&1; then
-  psql -X -A -F $'\t' -d postgres -c "SELECT queryid,calls,total_exec_time,mean_exec_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_exec_time DESC NULLS LAST LIMIT 15;" 2>/dev/null \
-    || psql -X -A -F $'\t' -d postgres -c "SELECT queryid,calls,total_time,mean_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_time DESC NULLS LAST LIMIT 15;" 2>/dev/null \
+  PSQL_Q1="SELECT queryid,calls,total_exec_time,mean_exec_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_exec_time DESC NULLS LAST LIMIT 15;"
+  PSQL_Q2="SELECT queryid,calls,total_time,mean_time,rows,left(query,300) AS query FROM pg_stat_statements ORDER BY total_time DESC NULLS LAST LIMIT 15;"
+  PSQL_CHECK="SELECT extname FROM pg_extension WHERE extname='pg_stat_statements';"
+  psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
+    || psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
+    || sudo -n -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_Q1" 2>/dev/null \
+    || sudo -n -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_Q2" 2>/dev/null \
+    || (psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but access is denied for current SSH user.") \
+    || (sudo -n -u postgres psql -X -A -F $'\t' -d postgres -c "$PSQL_CHECK" 2>/dev/null | rg -q '^pg_stat_statements$' && echo "pg_stat_statements extension exists but query access failed in this environment.") \
     || echo "pg_stat_statements extension is not available or access is denied."
 else
   echo "psql is not installed on remote host."
