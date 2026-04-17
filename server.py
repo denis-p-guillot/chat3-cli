@@ -502,6 +502,12 @@ def _render_issue_analysis_html(
       <pre>{html.escape(str(c.get('postgres_logs', '(no data)')))}</pre>
       <h3>pg_stat_statements</h3>
       <pre>{html.escape(str(c.get('pg_stat_statements', '(no data)')))}</pre>
+      <h3>Odoo addons inventory</h3>
+      <pre>{html.escape(str(c.get('odoo_addons', '(no data)')))}</pre>
+      <h3>Remote files inventory</h3>
+      <pre>{html.escape(str(c.get('remote_files', '(no data)')))}</pre>
+      <h3>Downloaded artifacts (workspace paths)</h3>
+      <pre>{html.escape(str("\n".join(c.get('artifact_paths', [])) if c.get('artifact_paths') else '(none)'))}</pre>
       <h3>Raw SSH Output (debug)</h3>
       <pre>{html.escape(str(c.get('raw_output', '(no output)')))}</pre>
     </section>
@@ -632,49 +638,47 @@ SUDO=""
 if sudo -n true >/dev/null 2>&1; then
   SUDO="sudo -n"
 fi
+run_cmd() {
+  if [ -n "$SUDO" ]; then
+    $SUDO sh -lc "$1" 2>/dev/null || true
+  else
+    sh -lc "$1" 2>/dev/null || true
+  fi
+}
+
 echo "===BEGIN_NGINX==="
 NGINX_OUT=""
-if [ -d /var/log/nginx ]; then
-  if [ -n "$SUDO" ]; then
-    NGINX_OUT="$($SUDO tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log 2>/dev/null || true)"
-  else
-    NGINX_OUT="$(tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log 2>/dev/null || true)"
-  fi
+NGINX_ERR_PATH="$(run_cmd "nginx -T | rg -o \"error_log\\s+[^;]+\" | awk '{print \$2}' | head -n 1")"
+NGINX_ACC_PATH="$(run_cmd "nginx -T | rg -o \"access_log\\s+[^;]+\" | awk '{print \$2}' | head -n 1")"
+if [ -n "$NGINX_ERR_PATH" ] || [ -n "$NGINX_ACC_PATH" ]; then
+  NGINX_OUT="$(run_cmd "tail -n 200 \"$NGINX_ERR_PATH\" \"$NGINX_ACC_PATH\"")"
+fi
+if [ -z "$NGINX_OUT" ] && [ -d /var/log/nginx ]; then
+  NGINX_OUT="$(run_cmd "tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log")"
 fi
 if [ -z "$NGINX_OUT" ]; then
-  if [ -n "$SUDO" ]; then
-    NGINX_OUT="$($SUDO journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager 2>/dev/null || true)"
-  else
-    NGINX_OUT="$(journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager 2>/dev/null || true)"
-  fi
-fi
-if [ -z "$NGINX_OUT" ]; then
-  NGINX_OUT="$(tail -n 200 /var/log/nginx/error.log /var/log/nginx/access.log /var/log/nginx/*error*.log /var/log/nginx/*access*.log 2>/dev/null || true)"
+  NGINX_OUT="$(run_cmd "journalctl -u nginx -u nginx.service -u nginx-mainline -n 200 --no-pager")"
 fi
 printf "%s\n" "$NGINX_OUT"
 echo "===END_NGINX==="
 
 echo "===BEGIN_ODOO==="
 ODOO_OUT=""
+ODOO_CONF_PATH="$(run_cmd "ps aux | rg -o -- '--config[= ]\\S+' | head -n 1 | sed -E 's/^--config[= ]//'")"
+if [ -n "$ODOO_CONF_PATH" ]; then
+  ODOO_LOG_PATH="$(run_cmd "rg -n '^\\s*logfile\\s*=' \"$ODOO_CONF_PATH\" | head -n 1 | awk -F= '{print \$2}' | xargs")"
+  if [ -n "$ODOO_LOG_PATH" ]; then
+    ODOO_OUT="$(run_cmd "tail -n 250 \"$ODOO_LOG_PATH\"")"
+  fi
+fi
 for f in /var/log/odoo/odoo.log /var/log/odoo/*.log /var/log/odoo.log /opt/odoo/log/*.log; do
-  if [ -f "$f" ]; then
-    if [ -n "$SUDO" ]; then
-      ODOO_OUT="$($SUDO tail -n 250 "$f" 2>/dev/null || true)"
-    else
-      ODOO_OUT="$(tail -n 250 "$f" 2>/dev/null || true)"
-    fi
+  if [ -z "$ODOO_OUT" ] && [ -f "$f" ]; then
+    ODOO_OUT="$(run_cmd "tail -n 250 \"$f\"")"
     [ -n "$ODOO_OUT" ] && break
   fi
 done
 if [ -z "$ODOO_OUT" ]; then
-  if [ -n "$SUDO" ]; then
-    ODOO_OUT="$($SUDO journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager 2>/dev/null || true)"
-  else
-    ODOO_OUT="$(journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager 2>/dev/null || true)"
-  fi
-fi
-if [ -z "$ODOO_OUT" ]; then
-  ODOO_OUT="$(journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager 2>/dev/null || true)"
+  ODOO_OUT="$(run_cmd "journalctl -u odoo -u odoo.service -u odoo-server -n 250 --no-pager")"
 fi
 if [ -z "$ODOO_OUT" ]; then
   ODOO_OUT="$(docker ps --format '{{.Names}}' 2>/dev/null | rg -i 'odoo' | head -n 1 | xargs -I{} docker logs --tail 250 {} 2>/dev/null || true)"
@@ -684,22 +688,20 @@ echo "===END_ODOO==="
 
 echo "===BEGIN_PGLOG==="
 PGLOG_OUT=""
-if [ -d /var/log/postgresql ]; then
-  if [ -n "$SUDO" ]; then
-    PGLOG_OUT="$($SUDO tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null || true)"
-  else
-    PGLOG_OUT="$(tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null || true)"
-  fi
+PGLOG_PATH="$(run_cmd "sudo -n -u postgres psql -X -A -t -d postgres -c \"SHOW log_directory;\" | head -n1 | xargs")"
+PGLOG_FILE="$(run_cmd "sudo -n -u postgres psql -X -A -t -d postgres -c \"SHOW log_filename;\" | head -n1 | xargs")"
+if [ -n "$PGLOG_PATH" ] && [ "$PGLOG_PATH" != "stderr" ]; then
+  case "$PGLOG_PATH" in
+    /*) PGLOG_GLOB="$PGLOG_PATH/$PGLOG_FILE" ;;
+    *) PGLOG_GLOB="/var/lib/postgresql/$PGLOG_PATH/$PGLOG_FILE" ;;
+  esac
+  PGLOG_OUT="$(run_cmd "ls -1t $PGLOG_GLOB 2>/dev/null | head -n 3 | xargs -r tail -n 250")"
+fi
+if [ -z "$PGLOG_OUT" ] && [ -d /var/log/postgresql ]; then
+  PGLOG_OUT="$(run_cmd "tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log")"
 fi
 if [ -z "$PGLOG_OUT" ]; then
-  if [ -n "$SUDO" ]; then
-    PGLOG_OUT="$($SUDO journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager 2>/dev/null || true)"
-  else
-    PGLOG_OUT="$(journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager 2>/dev/null || true)"
-  fi
-fi
-if [ -z "$PGLOG_OUT" ]; then
-  PGLOG_OUT="$(tail -n 250 /var/log/postgresql/*.log /var/log/postgresql/postgresql*.log 2>/dev/null || true)"
+  PGLOG_OUT="$(run_cmd "journalctl -u postgresql -u postgresql.service -u postgresql@* -n 250 --no-pager")"
 fi
 printf "%s\n" "$PGLOG_OUT"
 echo "===END_PGLOG==="
@@ -726,6 +728,36 @@ else
   echo "psql is not installed on remote host."
 fi
 echo "===END_PGSTATS==="
+
+echo "===BEGIN_ODOO_ADDONS==="
+ODOO_ADDONS_OUT=""
+if [ -n "$ODOO_CONF_PATH" ] && [ -f "$ODOO_CONF_PATH" ]; then
+  ODOO_ADDONS_PATHS="$(run_cmd "rg -n '^\s*addons_path\s*=' \"$ODOO_CONF_PATH\" | head -n 1 | awk -F= '{print \$2}' | xargs")"
+  if [ -n "$ODOO_ADDONS_PATHS" ]; then
+    ODOO_ADDONS_OUT="$(run_cmd "for p in $(echo \"$ODOO_ADDONS_PATHS\" | tr ',' ' '); do
+      echo \"## ADDONS PATH: $p\"
+      if [ -d \"$p\" ]; then
+        ls -1 \"$p\" 2>/dev/null | head -n 200
+      else
+        echo \"(path not found)\"
+      fi
+      echo
+    done")"
+  fi
+fi
+if [ -z "$ODOO_ADDONS_OUT" ]; then
+  ODOO_ADDONS_OUT="(no addons inventory found)"
+fi
+printf "%s\n" "$ODOO_ADDONS_OUT"
+echo "===END_ODOO_ADDONS==="
+
+echo "===BEGIN_REMOTE_FILES==="
+REMOTE_FILES_OUT="$(run_cmd "echo '## NGINX LOG FILES'; ls -1 /var/log/nginx 2>/dev/null | head -n 200; \
+echo; echo '## ODOO LOG FILES'; ls -1 /var/log/odoo 2>/dev/null | head -n 200; \
+echo; echo '## POSTGRES LOG FILES'; ls -1 /var/log/postgresql 2>/dev/null | head -n 200; \
+echo; echo '## COMMON ODOO ADDONS PATHS'; ls -1 /odoo/addons /opt/odoo/addons /mnt/extra-addons 2>/dev/null | head -n 200")"
+printf "%s\n" "$REMOTE_FILES_OUT"
+echo "===END_REMOTE_FILES==="
 """
     res = run_ssh_command(
         host=row.host,
@@ -742,6 +774,8 @@ echo "===END_PGSTATS==="
     odoo_logs = _extract_tagged(body, "ODOO")
     postgres_logs = _extract_tagged(body, "PGLOG")
     pg_stats = _extract_tagged(body, "PGSTATS")
+    odoo_addons = _extract_tagged(body, "ODOO_ADDONS")
+    remote_files = _extract_tagged(body, "REMOTE_FILES")
     raw_output = body.strip() or "(no output)"
     if len(raw_output) > 6000:
         raw_output = raw_output[:6000] + "\n\n...[truncated]..."
@@ -760,6 +794,8 @@ echo "===END_PGSTATS==="
         "odoo_logs": odoo_logs,
         "postgres_logs": postgres_logs,
         "pg_stat_statements": pg_stats,
+        "odoo_addons": odoo_addons,
+        "remote_files": remote_files,
         "raw_output": raw_output,
         "findings": findings,
         "returncode": res.get("returncode"),
@@ -899,6 +935,27 @@ def tools_diagnose_error(
             attached.append(info)
             continue
         info.update(_collect_remote_diagnostics(row, key, password))
+        if info.get("diagnostics"):
+            root = ensure_named_workspace_layout(user.id, ws_id)
+            artifacts_dir = root / "diagnostics" / re.sub(r"[^a-zA-Z0-9._-]+", "_", row.name.strip() or "connection")
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            artifact_map: dict[str, str] = {
+                "nginx_logs.txt": str(info.get("nginx_logs", "")),
+                "odoo_logs.txt": str(info.get("odoo_logs", "")),
+                "postgres_logs.txt": str(info.get("postgres_logs", "")),
+                "pg_stat_statements.txt": str(info.get("pg_stat_statements", "")),
+                "odoo_addons.txt": str(info.get("odoo_addons", "")),
+                "remote_files_inventory.txt": str(info.get("remote_files", "")),
+                "raw_output.txt": str(info.get("raw_output", "")),
+            }
+            artifact_paths: list[str] = []
+            for name, content in artifact_map.items():
+                p = artifacts_dir / name
+                p.write_text(content or "", encoding="utf-8")
+                artifact_paths.append(
+                    f"users/{user.id}/w/{ws_id}/diagnostics/{artifacts_dir.name}/{name}"
+                )
+            info["artifact_paths"] = artifact_paths
         attached.append(info)
     root = ensure_named_workspace_layout(user.id, ws_id)
     out_path = root / "issue_analysis.html"

@@ -82,6 +82,14 @@ type Meta = {
   active_workspace_name?: string
 }
 
+type NoticeTone = 'info' | 'success' | 'error'
+
+type Notice = {
+  id: string
+  message: string
+  tone: NoticeTone
+}
+
 function uid() {
   return crypto.randomUUID()
 }
@@ -469,6 +477,15 @@ function ChatSession({
   const [diagnoseContext, setDiagnoseContext] = useState('')
   const [diagnoseSshConnections, setDiagnoseSshConnections] = useState<string[]>([])
   const [toolboxDragOver, setToolboxDragOver] = useState(false)
+  const [notices, setNotices] = useState<Notice[]>([])
+
+  const pushNotice = (message: string, tone: NoticeTone = 'info') => {
+    const id = uid()
+    setNotices((prev) => [...prev, { id, message, tone }])
+    window.setTimeout(() => {
+      setNotices((prev) => prev.filter((n) => n.id !== id))
+    }, 4200)
+  }
 
   useEffect(() => {
     fetch('/api/meta', { credentials: 'include' })
@@ -681,19 +698,22 @@ function ChatSession({
     if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return
 
     if (files.length > MAX_ATTACHMENTS) {
-      alert(`You can attach at most ${MAX_ATTACHMENTS} files.`)
+      pushNotice(`You can attach at most ${MAX_ATTACHMENTS} files.`, 'error')
       return
     }
     let total = 0
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
-        alert(`"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`)
+        pushNotice(`"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`, 'error')
         return
       }
       total += f.size
     }
     if (total > MAX_TOTAL_UPLOAD_BYTES) {
-      alert(`Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`)
+      pushNotice(
+        `Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`,
+        'error',
+      )
       return
     }
 
@@ -849,7 +869,7 @@ function ChatSession({
       await activateWorkspace(id)
       await onMeRefresh()
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      pushNotice(e instanceof Error ? e.message : String(e), 'error')
     } finally {
       setWorkspaceBusy(false)
     }
@@ -867,8 +887,9 @@ function ChatSession({
       await onMeRefresh()
       const d = await fetchWorkspacesList()
       setWorkspaceList(d.workspaces)
+      pushNotice(`Workspace "${trimmed}" created and activated.`, 'success')
     } catch (e) {
-      alert(e instanceof Error ? e.message : String(e))
+      pushNotice(e instanceof Error ? e.message : String(e), 'error')
     } finally {
       setWorkspaceBusy(false)
     }
@@ -944,9 +965,9 @@ function ChatSession({
     try {
       const res = await testSshConnection(id)
       if (res.ok) {
-        alert(`SSH test successful.\n${res.stdout || '(no output)'}`)
+        pushNotice(`SSH test successful. ${res.stdout || '(no output)'}`, 'success')
       } else {
-        alert(`SSH test failed.\n${res.stderr || '(no error output)'}`)
+        pushNotice(`SSH test failed. ${res.stderr || '(no error output)'}`, 'error')
       }
     } catch (err) {
       setSshErr(err instanceof Error ? err.message : String(err))
@@ -965,7 +986,7 @@ function ChatSession({
       setToolboxOpen(false)
       setDiagnoseContext('')
       setDiagnoseSshConnections([])
-      alert(`Report generated: ${out.name}\nLinked to your next prompt as ${out.path}`)
+      pushNotice(`Report generated: ${out.name}. Linked as ${out.path}.`, 'success')
     } catch (err) {
       setDiagnoseErr(err instanceof Error ? err.message : String(err))
     } finally {
@@ -1149,6 +1170,23 @@ function ChatSession({
       )}
 
       <main className="main">
+        {notices.length > 0 && (
+          <div className="toast-stack" aria-live="polite">
+            {notices.map((n) => (
+              <div key={n.id} className={`toast toast-${n.tone}`}>
+                <span>{n.message}</span>
+                <button
+                  type="button"
+                  className="toast-close"
+                  onClick={() => setNotices((prev) => prev.filter((x) => x.id !== n.id))}
+                  aria-label="Dismiss notification"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="thread" ref={threadRef}>
           {busy && (
             <div className="exec-banner" aria-busy="true" aria-live="polite">
