@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { ChatMarkdown } from './components/ChatMarkdown'
 import {
   MAX_ATTACHMENTS,
   MAX_FILE_BYTES,
@@ -1641,7 +1640,7 @@ function ChatSession({
               )}
               {m.role === 'assistant' && (
                 <div className="md">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                  <ChatMarkdown>{m.content}</ChatMarkdown>
                 </div>
               )}
               {m.role === 'tool' && <ToolBlock name={m.name} args={m.args} output={m.output} />}
@@ -1659,7 +1658,7 @@ function ChatSession({
                     <span className="who">Brain AI</span>
                   </header>
                   <div className="md">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{live.assistant}</ReactMarkdown>
+                    <ChatMarkdown>{live.assistant}</ChatMarkdown>
                   </div>
                 </article>
               )}
@@ -1680,7 +1679,8 @@ function ChatSession({
                 <strong>Proposal generated</strong>
                 <p className="muted proposal-slides-banner-text">
                   Open a new Google Slides deck, then paste the copied outline into slide titles and bodies (one block per
-                  section). You can tweak formatting in Slides after paste.
+                  section). Mermaid architecture diagrams are omitted from the outline—keep the chat open for the visual,
+                  or recreate shapes in Slides. You can tweak formatting after paste.
                 </p>
               </div>
               <div className="proposal-slides-banner-actions">

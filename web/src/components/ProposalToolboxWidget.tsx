@@ -28,8 +28,8 @@ export function ProposalToolboxWidget({
           <a href="https://purple-cloud.ai" target="_blank" rel="noreferrer">
             PurpleCloud
           </a>{' '}
-          (backups, monitoring, Git deploys, multi-environment hosting). Required fields below must be filled
-          before running.
+          (backups, monitoring, Git deploys, multi-environment hosting). The assistant draws a **Mermaid architecture
+          diagram** in the proposal (rendered in chat). Required fields below must be filled before running.
         </p>
         <div className="toolbox-form">
           <label>
