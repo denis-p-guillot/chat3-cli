@@ -33,6 +33,22 @@ export function ProposalToolboxWidget({
         </p>
         <div className="toolbox-form">
           <label>
+            Language <span className="req">*</span>
+            <select
+              value={proposalForm.proposalLanguage}
+              onChange={(e) =>
+                onProposalFormChange({
+                  proposalLanguage: e.target.value as ProposalFormState['proposalLanguage'],
+                })
+              }
+            >
+              <option value="en">English</option>
+              <option value="fr">French</option>
+              <option value="es">Spanish</option>
+            </select>
+            <span className="muted toolbox-field-hint">Language of the generated proposal document (default: English).</span>
+          </label>
+          <label>
             Odoo version <span className="req">*</span>
             <input
               type="text"

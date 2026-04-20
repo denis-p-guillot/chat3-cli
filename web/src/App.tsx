@@ -1318,6 +1318,7 @@ function ChatSession({
       console.log('%c[PurpleCloud Proposal]', 'color:#c4b5fd;font-weight:bold', 'Step 3 — Prompt built.', {
         chars: text.length,
         productionTier: proposalForm.productionTier,
+        language: proposalForm.proposalLanguage,
       })
       const reply = await send({ text, proposalTrace: true })
       setProposalForm(emptyProposalForm())

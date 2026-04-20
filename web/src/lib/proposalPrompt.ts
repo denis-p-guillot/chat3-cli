@@ -15,7 +15,12 @@ export type ProposalEdition = 'enterprise' | 'community'
 /** Production sizing line: PERFORMANCE instances are named with AWS…; VALUE with DO… */
 export type ProposalProductionTier = 'PERFORMANCE' | 'VALUE'
 
+/** Language for the generated proposal text (default English). */
+export type ProposalLanguage = 'en' | 'fr' | 'es'
+
 export type ProposalFormState = {
+  /** Proposal document language (default English). */
+  proposalLanguage: ProposalLanguage
   odooVersion: string
   edition: '' | ProposalEdition
   /** Dedicated production topology: PERFORMANCE (AWS-prefixed instances) vs VALUE (DO-prefixed). */
@@ -27,6 +32,7 @@ export type ProposalFormState = {
 
 export function emptyProposalForm(): ProposalFormState {
   return {
+    proposalLanguage: 'en',
     odooVersion: '',
     edition: '',
     productionTier: '',
@@ -37,6 +43,9 @@ export function emptyProposalForm(): ProposalFormState {
 }
 
 export function validateProposalForm(form: ProposalFormState): { ok: true } | { ok: false; message: string } {
+  if (form.proposalLanguage !== 'en' && form.proposalLanguage !== 'fr' && form.proposalLanguage !== 'es') {
+    return { ok: false, message: 'Select proposal language: English, French, or Spanish.' }
+  }
   const v = form.odooVersion.trim()
   if (!v) {
     return { ok: false, message: 'Enter the Odoo version (e.g. 17 or 18).' }
@@ -76,6 +85,9 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
   if (!form.productionTier) {
     throw new Error('Production profile (PERFORMANCE or VALUE) is required.')
   }
+  const lang = form.proposalLanguage
+  const languageLabel =
+    lang === 'en' ? 'English' : lang === 'fr' ? 'French' : 'Spanish'
   const editionLabel = form.edition === 'enterprise' ? 'Enterprise' : 'Community'
   const tier: ProposalProductionTier = form.productionTier
   const tierExplain =
@@ -109,6 +121,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     'You are drafting a commercial proposal for a **dedicated Odoo** hosting deployment using **PurpleCloud** (https://purple-cloud.ai): an Odoo-focused cloud platform with dedicated servers, automated backups, security (including Cloudflare protection), monitoring, Git-based CI/CD, and separate environments (development, staging, production).',
     '',
     '## Confirmed inputs (use exactly as stated; do not change edition or version)',
+    `- **Language (proposal output):** ${languageLabel} — write the **entire** proposal (all sections, headings, narrative, and bullets) in **${languageLabel}**. Product names, technical labels, and USD amounts from the sizing grid may match the grid verbatim where needed.`,
     `- **Odoo version:** ${form.odooVersion.trim()}`,
     `- **Edition:** ${editionLabel}`,
     `- **Production profile:** ${tier} — ${tierExplain} When referencing concrete PurpleCloud instance tiers or catalogs, stay consistent with this profile.`,
@@ -120,7 +133,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     notesBlock,
     '',
     '## Deliverable',
-    'Produce a **professional proposal document** in **Markdown** suitable to send to a prospect. **Use `##` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Infrastructure need and yearly public B2C pricing must follow the “PurpleCloud hosting grid — sizing” section above** (same column meanings as the commercial grid: Product Name, Light users, Cloud Specifications, Workers Odoo, yearly public B2C in USD). Include:',
+    `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}** (except where quoting grid product names/figures). **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Infrastructure need and yearly public B2C pricing must follow the “PurpleCloud hosting grid — sizing” section above** (same column meanings as the commercial grid: Product Name, Light users, Cloud Specifications, Workers Odoo, yearly public B2C in USD). Include:`,
     '',
     '1. **Executive summary** — business value; why dedicated PurpleCloud versus self-managed infrastructure.',
     '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); modules only where mentioned in additional context.',
@@ -132,6 +145,6 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     '8. **Timeline & milestones** — onboarding, UAT, go-live.',
     '9. **Next steps** — information needed from the customer and suggested follow-up.',
     '',
-    'Tone: confident, concise, and sales-ready. If information is missing outside the confirmed inputs, note gaps and reasonable options rather than guessing sensitive numbers.',
+    `Tone: confident, concise, and sales-ready — in **${languageLabel}**. If information is missing outside the confirmed inputs, note gaps and reasonable options rather than guessing sensitive numbers.`,
   ].join('\n')
 }
