@@ -186,6 +186,85 @@ function formatUsd(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
+type ParsedProductShape = {
+  provider: string
+  vcpu: number | null
+  ramGb: number | null
+  ssdGb: number | null
+  backup: 'Backup' | 'NoBackup' | null
+}
+
+function parseProductShape(productName: string): ParsedProductShape {
+  const parts = productName.split('-')
+  const provider = parts[0] ?? 'N/A'
+  let vcpu: number | null = null
+  let ramGb: number | null = null
+  let ssdGb: number | null = null
+  let backup: 'Backup' | 'NoBackup' | null = null
+  for (const part of parts) {
+    const vcpuMatch = /^(\d+)vcpu$/i.exec(part)
+    if (vcpuMatch) vcpu = Number(vcpuMatch[1])
+    const ramMatch = /^(\d+)gbram$/i.exec(part)
+    if (ramMatch) ramGb = Number(ramMatch[1])
+    const ssdMatch = /^(\d+)gbssd$/i.exec(part)
+    if (ssdMatch) ssdGb = Number(ssdMatch[1])
+    if (part === 'Backup' || part === 'NoBackup') backup = part
+  }
+  return { provider, vcpu, ramGb, ssdGb, backup }
+}
+
+function describeAlternateDifference(
+  primary: PurpleCloudProductRow,
+  alternate: PurpleCloudProductRow,
+  audience: PricingAudience,
+  show1y: boolean,
+  show3y: boolean,
+): string {
+  const base = parseProductShape(primary.productName)
+  const alt = parseProductShape(alternate.productName)
+  const diffs: string[] = []
+  if (alt.provider !== base.provider) diffs.push(`provider ${alt.provider} (vs ${base.provider})`)
+  if (alt.vcpu !== base.vcpu && alt.vcpu != null && base.vcpu != null) {
+    diffs.push(`${alt.vcpu} vCPU (vs ${base.vcpu})`)
+  }
+  if (alt.ramGb !== base.ramGb && alt.ramGb != null && base.ramGb != null) {
+    diffs.push(`${alt.ramGb} GB RAM (vs ${base.ramGb})`)
+  }
+  if (alt.ssdGb !== base.ssdGb && alt.ssdGb != null && base.ssdGb != null) {
+    diffs.push(`${alt.ssdGb} GB SSD (vs ${base.ssdGb})`)
+  }
+  if (alt.backup !== base.backup && alt.backup != null && base.backup != null) {
+    diffs.push(`${alt.backup} (vs ${base.backup})`)
+  }
+  if (alternate.workersOdoo !== primary.workersOdoo) {
+    diffs.push(`catalog workers ${alternate.workersOdoo} (vs ${primary.workersOdoo})`)
+  }
+  if (alternate.lightUsers !== primary.lightUsers) {
+    diffs.push(`light users ${alternate.lightUsers} (vs ${primary.lightUsers})`)
+  }
+
+  const priceDiffs: string[] = []
+  if (show1y) {
+    const yDiff = priceYear1Usd(alternate, audience) - priceYear1Usd(primary, audience)
+    const sign = yDiff >= 0 ? '+' : '-'
+    priceDiffs.push(`1y ${sign}$${formatUsd(Math.abs(yDiff))}`)
+  }
+  if (show3y) {
+    const a3 = price3yTotalUsd(alternate, audience)
+    const p3 = price3yTotalUsd(primary, audience)
+    if (a3 != null && p3 != null) {
+      const d3 = a3 - p3
+      const sign3 = d3 >= 0 ? '+' : '-'
+      priceDiffs.push(`3y ${sign3}$${formatUsd(Math.abs(d3))}`)
+    } else {
+      priceDiffs.push('3y N/A')
+    }
+  }
+
+  const techDiff = diffs.length > 0 ? diffs.join(', ') : 'same core shape; catalog ordering alternative'
+  return `${techDiff}${priceDiffs.length > 0 ? `; price delta: ${priceDiffs.join(', ')}` : ''}`
+}
+
 /**
  * Smallest catalog row (by price among ties) in `grid` whose **Light users** covers `lightUserNeed`.
  * Uses the same matching rules as {@link recommendFromGrid} (including overflow to the largest row).
@@ -396,6 +475,12 @@ export function formatRecommendationForPrompt(
     '_Internal catalog rows—do not disclose SKU / product codes to the customer._',
     '',
     ...tableLines,
+    '',
+    '**Alternate differences vs primary (explicit):**',
+    '',
+    ...rec.alternates.map(
+      (alt, i) => `- **Alternate ${i + 1}:** ${describeAlternateDifference(rec.primary, alt, aud, show1y, show3y)}`,
+    ),
     '',
     '**Rules for the proposal:**',
     '',
