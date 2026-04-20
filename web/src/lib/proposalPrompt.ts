@@ -237,6 +237,13 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     ? '3. **Architecture (high level)** — align to the **primary** sizing profile unless you justify an alternate; when **Production** is in scope, **Odoo workers** in the sizing tables are **double** the raw catalog figure (×2) and catalog matching already used **2×** capacity need—**do not** quote internal product codes; relate **file store (GB)** to the proposed worker headroom in plain language; dedicated hosting, region/data residency from additional context if any.'
     : '3. **Architecture (high level)** — align to the **primary** sizing profile unless you justify an alternate; relate **file store (GB)** to the proposed **Odoo worker** headroom in plain language; dedicated hosting, region/data residency from additional context if any.'
 
+  const deliverableExecutiveSummary =
+    lang === 'fr'
+      ? '1. **Résumé exécutif** — valeur métier; pour le positionnement concurrentiel, utilisez explicitement la tournure **« Par rapport à une infrastructure gérée en interne ou Odoo.SH »** (PurpleCloud dédié vs gestion interne **et** vs l’offre SaaS Odoo.sh).'
+      : lang === 'es'
+        ? '1. **Resumen ejecutivo** — valor de negocio; por qué un Odoo **dedicado en PurpleCloud** frente a **infraestructura autogestionada/in-house u Odoo.sh** (tratar ambas alternativas).'
+        : '1. **Executive summary** — business value; why dedicated **PurpleCloud** versus **self-managed / on-premises infrastructure or Odoo.sh** (treat Odoo.sh as an explicit comparison baseline alongside in-house IT).'
+
   return [
     '[PurpleCloud Proposal]',
     '',
@@ -263,7 +270,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     '## Deliverable',
     `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}**. **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Capacity and pricing** must follow the “PurpleCloud hosting grid — sizing” section above using **Odoo workers** and **yearly public B2C (USD)** only—**never** quote internal catalog product codes (e.g. host-style SKU strings). Include:`,
     '',
-    '1. **Executive summary** — business value; why dedicated PurpleCloud versus self-managed infrastructure.',
+    deliverableExecutiveSummary,
     '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); the confirmed **file store (GB)** target; modules only where mentioned in additional context.',
     deliverableArchitecture,
     '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with dedicated Odoo hosting at the proposed **worker** level.',
