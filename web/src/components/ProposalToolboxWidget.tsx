@@ -33,7 +33,9 @@ export function ProposalToolboxWidget({
         </p>
         <div className="toolbox-form">
           <label>
-            Language <span className="req">*</span>
+            <span className="form-label-caption">
+              Language <span className="req">*</span>
+            </span>
             <select
               value={proposalForm.proposalLanguage}
               onChange={(e) =>
@@ -49,7 +51,9 @@ export function ProposalToolboxWidget({
             <span className="muted toolbox-field-hint">Language of the generated proposal document (default: English).</span>
           </label>
           <label>
-            Odoo version <span className="req">*</span>
+            <span className="form-label-caption">
+              Odoo version <span className="req">*</span>
+            </span>
             <input
               type="text"
               inputMode="decimal"
@@ -60,7 +64,9 @@ export function ProposalToolboxWidget({
             />
           </label>
           <label>
-            Edition <span className="req">*</span>
+            <span className="form-label-caption">
+              Edition <span className="req">*</span>
+            </span>
             <select
               value={proposalForm.edition}
               onChange={(e) =>
@@ -75,7 +81,9 @@ export function ProposalToolboxWidget({
             </select>
           </label>
           <label>
-            Production <span className="req">*</span>
+            <span className="form-label-caption">
+              Production <span className="req">*</span>
+            </span>
             <select
               value={proposalForm.productionTier}
               onChange={(e) =>
@@ -89,12 +97,15 @@ export function ProposalToolboxWidget({
               <option value="VALUE">VALUE</option>
             </select>
             <span className="muted toolbox-field-hint">
-              <strong>PERFORMANCE</strong> — production instances are the line whose names begin with{' '}
-              <strong>AWS</strong>. <strong>VALUE</strong> — names begin with <strong>DO</strong>.
+              <strong>PERFORMANCE</strong> — sizing uses catalog SKUs whose names begin with <strong>AWS</strong> (not DO).{' '}
+              <strong>VALUE</strong> — sizing uses SKUs whose names begin with <strong>DO</strong>. ERP users are counted as{' '}
+              <strong>heavy</strong> load (higher worker need than one “light” seat per user).
             </span>
           </label>
           <label>
-            Number of ERP users <span className="req">*</span>
+            <span className="form-label-caption">
+              Number of ERP users <span className="req">*</span>
+            </span>
             <input
               type="number"
               min={1}
@@ -105,7 +116,9 @@ export function ProposalToolboxWidget({
             />
           </label>
           <label>
-            Expected daily website visitors <span className="optional">(optional)</span>
+            <span className="form-label-caption">
+              Expected daily website visitors <span className="optional">(optional)</span>
+            </span>
             <input
               type="number"
               min={0}
@@ -117,7 +130,9 @@ export function ProposalToolboxWidget({
           </label>
         </div>
         <label className="toolbox-notes-label">
-          Additional context <span className="optional">(optional)</span>
+          <span className="form-label-caption">
+            Additional context <span className="optional">(optional)</span>
+          </span>
           <textarea
             className="toolbox-textarea"
             placeholder="Customer name, regions, key modules, integrations, timelines…"

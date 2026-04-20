@@ -28,7 +28,7 @@ export function AccountWidget({
         {me.username.includes('@') ? me.username : `@${me.username}`}
       </p>
       <label className="workspace-label">
-        Workspace
+        <span className="form-label-caption">Workspace</span>
         <select
           className="workspace-select"
           value={me.active_workspace_id}

@@ -5,6 +5,8 @@
 
 import {
   computeLightUserNeed,
+  ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
+  filterProductGridForProductionTier,
   formatRecommendationForPrompt,
   recommendFromGrid,
 } from './purpleCloudSizing'
@@ -102,11 +104,23 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
       : `${Number.parseInt(visRaw, 10).toLocaleString()} expected daily visitors to the website (e-commerce / public site traffic).`
 
   const dailyVisitors = visRaw === '' ? null : Number.parseInt(visRaw, 10)
-  const need = computeLightUserNeed(erp, dailyVisitors)
-  const rec = recommendFromGrid(PURPLE_CLOUD_PRODUCT_GRID, need, {
+  const tierGrid = filterProductGridForProductionTier(PURPLE_CLOUD_PRODUCT_GRID, tier)
+  if (tierGrid.length === 0) {
+    throw new Error(
+      tier === 'PERFORMANCE'
+        ? 'No AWS (PERFORMANCE) catalog rows are available for sizing.'
+        : 'No DO (VALUE) catalog rows are available for sizing.',
+    )
+  }
+  const need = computeLightUserNeed(erp, dailyVisitors, {
+    erpHeavyFactor: ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
+  })
+  const rec = recommendFromGrid(tierGrid, need, {
     erpUsers: erp,
     dailyVisitors,
     alternateCount: 2,
+    productionTier: tier,
+    erpHeavyFactor: ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
   })
   const gridSection = formatRecommendationForPrompt(rec)
 
@@ -140,7 +154,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     '3. **Architecture (high level)** — align to the **primary** grid recommendation unless you justify an alternate; dedicated hosting, region/data residency from additional context if any.',
     '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with the **Cloud specifications** text of the chosen row(s).',
     '5. **Security** — high-level posture from those specifications; do not fabricate certifications or contractual SLAs.',
-    '6. **Assumptions & exclusions** — explicit bullet list (include sizing method: Light user need = ERP users + ceil(daily visitors / 25,000) when visitors are provided).',
+    '6. **Assumptions & exclusions** — explicit bullet list (include sizing method: capacity need = ceil(ERP users × heavy factor) + ceil(daily visitors / 25,000) when visitors are provided; catalog rows are **AWS-only for PERFORMANCE** and **DO-only for VALUE**; ERP users are treated as **heavy** interactive load, not generic light seats).',
     '7. **Commercial structure** — **use the exact Product Name(s) and yearly public B2C (USD) amounts** from the primary (and optionally alternate) rows above. You may label them as public list prices. Do **not** invent SKUs or yearly amounts outside those rows.',
     '8. **Timeline & milestones** — onboarding, UAT, go-live.',
     '9. **Next steps** — information needed from the customer and suggested follow-up.',

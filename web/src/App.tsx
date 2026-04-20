@@ -380,7 +380,9 @@ function AuthPanel({ onLoggedIn }: { onLoggedIn: (me: Me) => void }) {
           {mode === 'register' && <PasswordStrengthMeter password={password} />}
           {mode === 'register' && (
             <label>
-              Display name <span className="optional">(optional)</span>
+              <span className="form-label-caption">
+                Display name <span className="optional">(optional)</span>
+              </span>
               <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
             </label>
           )}
@@ -1538,7 +1540,7 @@ function ChatSession({
           <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">
             PurpleCloud
           </a>{' '}
-          — Odoo cloud hosting &amp; automation
+          — Odoo Infra &amp; AI
         </p>
       </aside>
 

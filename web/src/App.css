@@ -215,15 +215,25 @@
 .toolbox-form {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.4rem;
   margin-bottom: 0.5rem;
+}
+
+/* Keeps label text + required asterisk / “(optional)” on one row (avoids flex-column splitting). */
+.form-label-caption {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem;
+  line-height: 1.25;
 }
 
 .toolbox-form label,
 .toolbox-notes-label {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.28rem;
   font-size: 0.76rem;
   color: var(--muted);
 }
@@ -268,7 +278,7 @@
   display: block;
   font-size: 0.68rem;
   line-height: 1.4;
-  margin-top: 0.2rem;
+  margin-top: 0.06rem;
   font-weight: 400;
 }
 
@@ -1007,7 +1017,7 @@
 .workspace-label {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.28rem;
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -1453,7 +1463,7 @@
 .auth-form label {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.3rem;
   font-size: 0.82rem;
   color: var(--muted);
 }

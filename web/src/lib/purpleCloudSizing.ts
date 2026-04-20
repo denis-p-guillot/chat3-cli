@@ -13,18 +13,54 @@ export type PurpleCloudProductRow = {
   yearlyPriceUsd: number
 }
 
-export function computeLightUserNeed(erpUsers: number, dailyVisitors: number | null): number {
-  let need = erpUsers
+/**
+ * ERP named users are treated as heavier than generic “light” portal seats: each ERP user
+ * counts as this many light-user capacity units when matching the catalog (higher → larger
+ * rows with more Odoo workers).
+ */
+export const ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR = 2
+
+export type ComputeLightUserNeedOptions = {
+  /** Defaults to {@link ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR}. */
+  erpHeavyFactor?: number
+}
+
+/**
+ * Capacity need for grid matching: ERP users × heavy factor (ceil) plus visitor load
+ * (+1 unit per 25,000 daily visitors when provided).
+ */
+export function computeLightUserNeed(
+  erpUsers: number,
+  dailyVisitors: number | null,
+  options?: ComputeLightUserNeedOptions,
+): number {
+  const f = options?.erpHeavyFactor ?? ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR
+  let need = Math.ceil(erpUsers * f)
   if (dailyVisitors != null && dailyVisitors > 0) {
     need += Math.ceil(dailyVisitors / 25_000)
   }
   return need
 }
 
+/** PERFORMANCE SKUs use AWS-prefixed product names; VALUE SKUs use DO-prefixed names. */
+export function filterProductGridForProductionTier(
+  grid: PurpleCloudProductRow[],
+  tier: 'PERFORMANCE' | 'VALUE',
+): PurpleCloudProductRow[] {
+  if (tier === 'PERFORMANCE') {
+    return grid.filter((r) => r.productName.startsWith('AWS'))
+  }
+  return grid.filter((r) => r.productName.startsWith('DO'))
+}
+
 export type GridRecommendation = {
   needLightUsers: number
   erpUsers: number
   dailyVisitors: number | null
+  /** Factor applied to ERP users before matching the “Light users” column (heavy ERP load). */
+  erpHeavyFactor: number
+  /** Catalog slice: AWS rows for PERFORMANCE, DO rows for VALUE. */
+  productionTier: 'PERFORMANCE' | 'VALUE'
   primary: PurpleCloudProductRow
   alternates: PurpleCloudProductRow[]
   overflow: boolean
@@ -38,7 +74,13 @@ export type GridRecommendation = {
 export function recommendFromGrid(
   grid: PurpleCloudProductRow[],
   need: number,
-  opts: { erpUsers: number; dailyVisitors: number | null; alternateCount?: number },
+  opts: {
+    erpUsers: number
+    dailyVisitors: number | null
+    alternateCount?: number
+    productionTier: 'PERFORMANCE' | 'VALUE'
+    erpHeavyFactor: number
+  },
 ): GridRecommendation {
   if (grid.length === 0) {
     throw new Error('PurpleCloud product grid is empty.')
@@ -87,6 +129,8 @@ export function recommendFromGrid(
     needLightUsers: need,
     erpUsers: opts.erpUsers,
     dailyVisitors: opts.dailyVisitors,
+    erpHeavyFactor: opts.erpHeavyFactor,
+    productionTier: opts.productionTier,
     primary,
     alternates,
     overflow,
@@ -95,16 +139,22 @@ export function recommendFromGrid(
 }
 
 export function formatRecommendationForPrompt(rec: GridRecommendation): string {
+  const tierLabel =
+    rec.productionTier === 'PERFORMANCE'
+      ? 'PERFORMANCE — catalog rows whose **Product Name** starts with `AWS`'
+      : 'VALUE — catalog rows whose **Product Name** starts with `DO`'
   const lines: string[] = [
     '## PurpleCloud hosting grid — sizing (mandatory)',
     '',
-    `- **ERP users (input):** ${rec.erpUsers.toLocaleString()}`,
+    `- **Production profile:** ${tierLabel}. Recommendations below are drawn **only** from this slice.`,
+    `- **ERP users (input):** ${rec.erpUsers.toLocaleString()} — treated as **heavy** Odoo users (not “light” seats).`,
+    `- **ERP → capacity weighting:** each ERP user counts as **${rec.erpHeavyFactor}** light-user capacity units (\`ceil(ERP users × ${rec.erpHeavyFactor})\`) so worker counts align with interactive ERP load.`,
     `- **Expected daily website visitors:** ${
       rec.dailyVisitors == null || rec.dailyVisitors === 0
         ? 'not specified'
         : rec.dailyVisitors.toLocaleString()
     }`,
-    `- **Computed “light user” need:** ${rec.needLightUsers.toLocaleString()} (ERP users plus visitor load: +1 per 25,000 daily visitors when visitors are provided)`,
+    `- **Computed capacity need (matches “Light users” column):** ${rec.needLightUsers.toLocaleString()} (= weighted ERP load + visitor load: +1 per 25,000 daily visitors when visitors are provided)`,
     '',
   ]
   if (rec.overflow) {
@@ -139,6 +189,7 @@ export function formatRecommendationForPrompt(rec: GridRecommendation): string {
     '**Rules for the proposal:**',
     '',
     '- Base **infrastructure need** and **yearly public pricing** on the rows above only; **do not invent** SKUs or yearly amounts.',
+    `- **PERFORMANCE** proposals must reference **AWS-** SKUs only; **VALUE** proposals must reference **DO-** SKUs only (already enforced by the slice above).`,
     '- You may phrase alternatives as “starting from” the primary row; mention alternates briefly.',
     '- If overflow applies, state clearly that sizing exceeds the bundled catalog excerpt and requires validation.',
     '',
