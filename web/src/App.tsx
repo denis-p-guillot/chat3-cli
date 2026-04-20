@@ -48,6 +48,7 @@ import {
 import {
   buildPurpleCloudProposalRequest,
   emptyProposalForm,
+  resolveCatalogTierForSizing,
   validateProposalForm,
 } from './lib/proposalPrompt'
 import { renderDiagnoseHtmlReport, runDiagnoseErrorStream } from './lib/tools'
@@ -1319,8 +1320,14 @@ function ChatSession({
       const text = buildPurpleCloudProposalRequest(proposalForm)
       console.log('%c[PurpleCloud Proposal]', 'color:#c4b5fd;font-weight:bold', 'Step 3 — Prompt built.', {
         chars: text.length,
-        productionTier: proposalForm.productionTier,
+        catalogTier: resolveCatalogTierForSizing(proposalForm),
         language: proposalForm.proposalLanguage,
+        fileStoreGb: proposalForm.fileStoreSizeGb,
+        instances: {
+          dev: proposalForm.includeDevInstance,
+          staging: proposalForm.includeStagingInstance,
+          production: proposalForm.includeProductionInstance,
+        },
       })
       const reply = await send({ text, proposalTrace: true })
       setProposalForm(emptyProposalForm())

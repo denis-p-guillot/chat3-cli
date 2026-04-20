@@ -282,6 +282,57 @@
   font-weight: 400;
 }
 
+.toolbox-env-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.45rem 0 0.15rem;
+  margin: 0.15rem 0 0.25rem;
+  border-top: 1px solid rgba(167, 139, 250, 0.12);
+}
+
+.toolbox-env-section-title {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.toolbox-env-intro {
+  margin-top: 0;
+}
+
+.toolbox-env-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.toolbox-env-toggle input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+  accent-color: #8b5cf6;
+}
+
+.toolbox-env-nested {
+  margin: 0.05rem 0 0.15rem 1.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+
+.toolbox-env-locked {
+  margin: 0.05rem 0 0.1rem 1.55rem;
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
 .toolbox-item.toolbox-drop {
   border-radius: 8px;
   box-shadow: inset 0 0 0 2px rgba(167, 139, 250, 0.35);

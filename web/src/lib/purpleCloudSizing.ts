@@ -138,7 +138,27 @@ export function recommendFromGrid(
   }
 }
 
-export function formatRecommendationForPrompt(rec: GridRecommendation): string {
+/** Catalog Odoo workers × this factor for production proposals (+50% headroom). */
+export const PRODUCTION_WORKER_DISPLAY_MULTIPLIER = 1.5
+
+export type FormatRecommendationForPromptOptions = {
+  /**
+   * When not `1`, the **Workers (Odoo)** table column shows `catalog × multiplier`
+   * (e.g. 1.5 for +50% production headroom), with the catalog baseline noted.
+   */
+  workerDisplayMultiplier?: number
+}
+
+function formatWorkersDisplayValue(workersOdoo: number): string {
+  if (Number.isInteger(workersOdoo)) return String(workersOdoo)
+  return String(Math.round(workersOdoo * 100) / 100)
+}
+
+export function formatRecommendationForPrompt(
+  rec: GridRecommendation,
+  options?: FormatRecommendationForPromptOptions,
+): string {
+  const workerMult = options?.workerDisplayMultiplier ?? 1
   const tierLabel =
     rec.productionTier === 'PERFORMANCE'
       ? 'PERFORMANCE — catalog rows whose **Product Name** starts with `AWS`'
@@ -157,20 +177,32 @@ export function formatRecommendationForPrompt(rec: GridRecommendation): string {
     `- **Computed capacity need (matches “Light users” column):** ${rec.needLightUsers.toLocaleString()} (= weighted ERP load + visitor load: +1 per 25,000 daily visitors when visitors are provided)`,
     '',
   ]
+  if (workerMult !== 1) {
+    const pct = Math.round((workerMult - 1) * 100)
+    lines.push(
+      `- **Odoo workers (production uplift):** because this proposal includes a **Production** instance, the **Workers (Odoo)** values in the tables below are **catalog workers × ${workerMult}** (+${pct}% vs the bundled grid). The **Cloud specifications** blocks remain verbatim from the catalog—when writing the proposal, present the **uplifted** worker count as the recommended production target and mention the catalog baseline for traceability.`,
+      '',
+    )
+  }
   if (rec.overflow) {
     lines.push(
       `- **Warning:** No catalog row has **Light users** ≥ ${rec.needLightUsers.toLocaleString()}. The largest **Light users** value in the bundled grid is **${rec.maxLightUsersInGrid.toLocaleString()}**. The rows below are the closest available offerings; call out that **sales / solution architecture must validate** capacity above the grid.`,
       '',
     )
   }
-  const fmtRow = (label: string, r: PurpleCloudProductRow) =>
-    [
+  const fmtRow = (label: string, r: PurpleCloudProductRow) => {
+    const workersAdjusted = r.workersOdoo * workerMult
+    const workersCell =
+      workerMult !== 1
+        ? `${formatWorkersDisplayValue(workersAdjusted)} (catalog ${formatWorkersDisplayValue(r.workersOdoo)} × ${workerMult} for production)`
+        : formatWorkersDisplayValue(r.workersOdoo)
+    return [
       `### ${label}: \`${r.productName}\``,
       '',
       '| Column | Value |',
       '| --- | --- |',
       `| Light users | ${r.lightUsers} |`,
-      `| Workers (Odoo) | ${r.workersOdoo} |`,
+      `| Workers (Odoo) | ${workersCell} |`,
       `| Yearly public B2C (USD) | ${r.yearlyPriceUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} |`,
       '',
       '**Cloud specifications (verbatim from grid):**',
@@ -180,6 +212,7 @@ export function formatRecommendationForPrompt(rec: GridRecommendation): string {
       '```',
       '',
     ].join('\n')
+  }
 
   lines.push(fmtRow('Primary recommendation', rec.primary))
   for (let i = 0; i < rec.alternates.length; i++) {
@@ -189,6 +222,11 @@ export function formatRecommendationForPrompt(rec: GridRecommendation): string {
     '**Rules for the proposal:**',
     '',
     '- Base **infrastructure need** and **yearly public pricing** on the rows above only; **do not invent** SKUs or yearly amounts.',
+    ...(workerMult !== 1
+      ? [
+          `- **Production worker uplift:** use the **Workers (Odoo)** values already scaled to **+${Math.round((workerMult - 1) * 100)}%** in the tables for any **production**-grade sizing narrative; do not reduce them back to the raw catalog figure without justification.`,
+        ]
+      : []),
     `- **PERFORMANCE** proposals must reference **AWS-** SKUs only; **VALUE** proposals must reference **DO-** SKUs only (already enforced by the slice above).`,
     '- You may phrase alternatives as “starting from” the primary row; mention alternates briefly.',
     '- If overflow applies, state clearly that sizing exceeds the bundled catalog excerpt and requires validation.',

@@ -1,4 +1,4 @@
-import type { ProposalFormState } from '../lib/proposalPrompt'
+import type { ProposalFormState, ProposalProductionTier } from '../lib/proposalPrompt'
 
 type ProposalToolboxWidgetProps = {
   chatBusy: boolean
@@ -80,28 +80,131 @@ export function ProposalToolboxWidget({
               <option value="community">Community</option>
             </select>
           </label>
-          <label>
-            <span className="form-label-caption">
-              Production <span className="req">*</span>
-            </span>
-            <select
-              value={proposalForm.productionTier}
-              onChange={(e) =>
-                onProposalFormChange({
-                  productionTier: e.target.value as ProposalFormState['productionTier'],
-                })
-              }
-            >
-              <option value="">Select…</option>
-              <option value="PERFORMANCE">PERFORMANCE</option>
-              <option value="VALUE">VALUE</option>
-            </select>
-            <span className="muted toolbox-field-hint">
-              <strong>PERFORMANCE</strong> — sizing uses catalog SKUs whose names begin with <strong>AWS</strong> (not DO).{' '}
-              <strong>VALUE</strong> — sizing uses SKUs whose names begin with <strong>DO</strong>. ERP users are counted as{' '}
-              <strong>heavy</strong> load (higher worker need than one “light” seat per user).
-            </span>
-          </label>
+          <div className="toolbox-env-section">
+            <p className="toolbox-env-section-title">Odoo instances</p>
+            <p className="muted toolbox-field-hint toolbox-env-intro">
+              Include or exclude each environment. Catalog sizing uses <strong>Production</strong> tier when production
+              is included; otherwise <strong>Staging</strong>, otherwise <strong>Development</strong>.{' '}
+              <strong>PERFORMANCE</strong> Production requires <strong>PERFORMANCE</strong> Staging. Dev may be{' '}
+              <strong>PERFORMANCE</strong> or <strong>VALUE</strong> independently.
+            </p>
+            <label className="toolbox-env-toggle">
+              <input
+                type="checkbox"
+                checked={proposalForm.includeDevInstance}
+                onChange={(e) => onProposalFormChange({ includeDevInstance: e.target.checked })}
+              />
+              <span>Development instance</span>
+            </label>
+            {proposalForm.includeDevInstance && (
+              <div className="toolbox-env-nested">
+                <label>
+                  <span className="form-label-caption">
+                    Dev tier <span className="req">*</span>
+                  </span>
+                  <select
+                    value={proposalForm.devInstanceTier}
+                    onChange={(e) =>
+                      onProposalFormChange({
+                        devInstanceTier: e.target.value as ProposalProductionTier,
+                      })
+                    }
+                  >
+                    <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
+                    <option value="VALUE">VALUE (DO)</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            <label className="toolbox-env-toggle">
+              <input
+                type="checkbox"
+                checked={proposalForm.includeStagingInstance}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  if (
+                    on &&
+                    proposalForm.includeProductionInstance &&
+                    proposalForm.productionTier === 'PERFORMANCE'
+                  ) {
+                    onProposalFormChange({ includeStagingInstance: true, stagingInstanceTier: 'PERFORMANCE' })
+                  } else {
+                    onProposalFormChange({ includeStagingInstance: on })
+                  }
+                }}
+              />
+              <span>Staging instance</span>
+            </label>
+            {proposalForm.includeStagingInstance && (
+              <div className="toolbox-env-nested">
+                {proposalForm.includeProductionInstance && proposalForm.productionTier === 'PERFORMANCE' ? (
+                  <p className="muted toolbox-env-locked">
+                    Staging tier is <strong>PERFORMANCE (AWS)</strong> — required when Production is PERFORMANCE.
+                  </p>
+                ) : (
+                  <label>
+                    <span className="form-label-caption">
+                      Staging tier <span className="req">*</span>
+                    </span>
+                    <select
+                      value={proposalForm.stagingInstanceTier}
+                      onChange={(e) =>
+                        onProposalFormChange({
+                          stagingInstanceTier: e.target.value as ProposalProductionTier,
+                        })
+                      }
+                    >
+                      <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
+                      <option value="VALUE">VALUE (DO)</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+            )}
+            <label className="toolbox-env-toggle">
+              <input
+                type="checkbox"
+                checked={proposalForm.includeProductionInstance}
+                onChange={(e) => {
+                  const on = e.target.checked
+                  onProposalFormChange(
+                    on
+                      ? { includeProductionInstance: true }
+                      : { includeProductionInstance: false, productionTier: '' },
+                  )
+                }}
+              />
+              <span>Production instance</span>
+            </label>
+            {proposalForm.includeProductionInstance && (
+              <div className="toolbox-env-nested">
+                <label>
+                  <span className="form-label-caption">
+                    Production tier <span className="req">*</span>
+                  </span>
+                  <select
+                    value={proposalForm.productionTier}
+                    onChange={(e) => {
+                      const v = e.target.value as ProposalFormState['productionTier']
+                      const patch: Partial<ProposalFormState> = { productionTier: v }
+                      if (proposalForm.includeStagingInstance && v === 'PERFORMANCE') {
+                        patch.stagingInstanceTier = 'PERFORMANCE'
+                      }
+                      onProposalFormChange(patch)
+                    }}
+                  >
+                    <option value="">Select…</option>
+                    <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
+                    <option value="VALUE">VALUE (DO)</option>
+                  </select>
+                </label>
+                <span className="muted toolbox-field-hint">
+                  Sizing grid follows this tier when production is included. ERP users are counted as{' '}
+                  <strong>heavy</strong> load vs catalog “light users”.
+                </span>
+              </div>
+            )}
+          </div>
           <label>
             <span className="form-label-caption">
               Number of ERP users <span className="req">*</span>
@@ -114,6 +217,20 @@ export function ProposalToolboxWidget({
               value={proposalForm.erpUserCount}
               onChange={(e) => onProposalFormChange({ erpUserCount: e.target.value })}
             />
+          </label>
+          <label>
+            <span className="form-label-caption">
+              File store size in GB <span className="req">*</span>
+            </span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              placeholder="Odoo filestore / attachments (e.g. 50, 100)"
+              value={proposalForm.fileStoreSizeGb}
+              onChange={(e) => onProposalFormChange({ fileStoreSizeGb: e.target.value })}
+            />
+            <span className="muted toolbox-field-hint">Total GB for Odoo filestore and attachments the prospect needs.</span>
           </label>
           <label>
             <span className="form-label-caption">
