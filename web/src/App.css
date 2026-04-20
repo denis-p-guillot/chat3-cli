@@ -229,6 +229,22 @@
   line-height: 1.25;
 }
 
+.toolbox-info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 999px;
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  color: #ddd6fe;
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
 .toolbox-form label,
 .toolbox-notes-label {
   display: flex;
@@ -270,7 +286,7 @@
 }
 
 .toolbox-help {
-  margin: 0 0 0.45rem;
+  margin: 0 0 0.35rem;
   font-size: 0.76rem;
 }
 
@@ -293,6 +309,9 @@
 
 .toolbox-env-section-title {
   margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -306,7 +325,7 @@
 
 .toolbox-env-toggle {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 0.45rem;
   margin: 0;
   font-size: 0.76rem;
@@ -315,9 +334,15 @@
 }
 
 .toolbox-env-toggle input {
-  margin-top: 0.2rem;
+  margin-top: 0;
   flex-shrink: 0;
   accent-color: #8b5cf6;
+}
+
+.toolbox-commitment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
 }
 
 .toolbox-env-nested {

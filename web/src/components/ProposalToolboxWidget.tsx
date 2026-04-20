@@ -10,6 +10,14 @@ type ProposalToolboxWidgetProps = {
   onRunProposal: () => void
 }
 
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="toolbox-info-tip" title={text} aria-label={text}>
+      ?
+    </span>
+  )
+}
+
 export function ProposalToolboxWidget({
   chatBusy,
   diagnoseBusy,
@@ -23,18 +31,12 @@ export function ProposalToolboxWidget({
     <div className="sidebar-section sidebar-widget">
       <h2>Proposal</h2>
       <div className="toolbox-item toolbox-item-proposal">
-        <p className="muted toolbox-help">
-          Draft a commercial proposal for a <strong>dedicated Odoo</strong> environment on{' '}
-          <a href="https://purple-cloud.ai" target="_blank" rel="noreferrer">
-            PurpleCloud
-          </a>{' '}
-          (backups, monitoring, Git deploys, multi-environment hosting). The assistant draws a **Mermaid architecture
-          diagram** in the proposal (rendered in chat). Required fields below must be filled before running.
-        </p>
+        <p className="muted toolbox-help">Fill required fields, then run to generate the commercial proposal.</p>
         <div className="toolbox-form">
           <label>
             <span className="form-label-caption">
               Language <span className="req">*</span>
+              <InfoTip text="Language of the generated proposal document." />
             </span>
             <select
               value={proposalForm.proposalLanguage}
@@ -48,13 +50,11 @@ export function ProposalToolboxWidget({
               <option value="fr">French</option>
               <option value="es">Spanish</option>
             </select>
-            <span className="muted toolbox-field-hint">Language of the generated proposal document (default: English).</span>
           </label>
           <div className="toolbox-pricing-section">
-            <p className="toolbox-env-section-title">Catalog pricing</p>
-            <p className="muted toolbox-field-hint">
-              List prices follow the internal grid: choose <strong>B2B</strong> (partner / business) or <strong>B2C</strong>{' '}
-              (public), then which commitment columns to include in the proposal tables.
+            <p className="toolbox-env-section-title">
+              Catalog pricing
+              <InfoTip text="Choose B2B (business/partner) or B2C (public list), then select which commitment columns to include in proposal tables." />
             </p>
             <label>
               <span className="form-label-caption">
@@ -86,7 +86,8 @@ export function ProposalToolboxWidget({
                     }
                   }}
                 />
-                <span>1-year commitment (yearly USD)</span>
+                <span>1-year</span>
+                <InfoTip text="Include yearly USD pricing column." />
               </label>
               <label className="toolbox-env-toggle">
                 <input
@@ -101,17 +102,15 @@ export function ProposalToolboxWidget({
                     }
                   }}
                 />
-                <span>3-year commitment (total USD for 3 years, where published)</span>
+                <span>3-year</span>
+                <InfoTip text="Include total USD for a 3-year commitment (where published)." />
               </label>
             </div>
-            <span className="muted toolbox-field-hint">
-              At least one of <strong>1-year</strong> or <strong>3-year</strong> must stay checked. VALUE (DO) rows may
-              show <strong>N/A</strong> for 3-year totals where the catalog does not offer that term.
-            </span>
           </div>
           <label>
             <span className="form-label-caption">
               Odoo version <span className="req">*</span>
+              <InfoTip text="Target Odoo major version(s), e.g. 17, 18, 19." />
             </span>
             <input
               type="text"
@@ -125,6 +124,7 @@ export function ProposalToolboxWidget({
           <label>
             <span className="form-label-caption">
               Edition <span className="req">*</span>
+              <InfoTip text="Choose Enterprise or Community edition." />
             </span>
             <select
               value={proposalForm.edition}
@@ -140,12 +140,9 @@ export function ProposalToolboxWidget({
             </select>
           </label>
           <div className="toolbox-env-section">
-            <p className="toolbox-env-section-title">Odoo instances</p>
-            <p className="muted toolbox-field-hint toolbox-env-intro">
-              Include or exclude each environment. Catalog sizing uses <strong>Production</strong> tier when production
-              is included; otherwise <strong>Staging</strong>, otherwise <strong>Development</strong>.{' '}
-              <strong>PERFORMANCE</strong> Production requires <strong>PERFORMANCE</strong> Staging. Dev may be{' '}
-              <strong>PERFORMANCE</strong> or <strong>VALUE</strong> independently.
+            <p className="toolbox-env-section-title">
+              Odoo instances
+              <InfoTip text="Include/exclude each environment. If Production is included, sizing follows Production tier; otherwise Staging, otherwise Development. PERFORMANCE Production requires PERFORMANCE Staging." />
             </p>
             <label className="toolbox-env-toggle">
               <input
@@ -160,6 +157,7 @@ export function ProposalToolboxWidget({
                 <label>
                   <span className="form-label-caption">
                     Dev tier <span className="req">*</span>
+                    <InfoTip text="Catalog family for Development: PERFORMANCE (AWS) or VALUE (DO)." />
                   </span>
                   <select
                     value={proposalForm.devInstanceTier}
@@ -204,6 +202,7 @@ export function ProposalToolboxWidget({
                   <label>
                     <span className="form-label-caption">
                       Staging tier <span className="req">*</span>
+                      <InfoTip text="Catalog family for Staging: PERFORMANCE (AWS) or VALUE (DO)." />
                     </span>
                     <select
                       value={proposalForm.stagingInstanceTier}
@@ -240,6 +239,7 @@ export function ProposalToolboxWidget({
                 <label>
                   <span className="form-label-caption">
                     Production tier <span className="req">*</span>
+                    <InfoTip text="Catalog family for Production. PERFORMANCE uses AWS rows; VALUE uses DO rows." />
                   </span>
                   <select
                     value={proposalForm.productionTier}
@@ -257,16 +257,13 @@ export function ProposalToolboxWidget({
                     <option value="VALUE">VALUE (DO)</option>
                   </select>
                 </label>
-                <span className="muted toolbox-field-hint">
-                  Sizing grid follows this tier when production is included. ERP users are counted as{' '}
-                  <strong>heavy</strong> load vs catalog “light users”.
-                </span>
               </div>
             )}
           </div>
           <label>
             <span className="form-label-caption">
               Number of ERP users <span className="req">*</span>
+              <InfoTip text="Named/billable Odoo users. Used in catalog sizing (ERP users are weighted as heavy load)." />
             </span>
             <input
               type="number"
@@ -280,6 +277,7 @@ export function ProposalToolboxWidget({
           <label>
             <span className="form-label-caption">
               File store size in GB <span className="req">*</span>
+              <InfoTip text="Total filestore/attachments size needed by the customer (GB)." />
             </span>
             <input
               type="number"
@@ -289,11 +287,11 @@ export function ProposalToolboxWidget({
               value={proposalForm.fileStoreSizeGb}
               onChange={(e) => onProposalFormChange({ fileStoreSizeGb: e.target.value })}
             />
-            <span className="muted toolbox-field-hint">Total GB for Odoo filestore and attachments the prospect needs.</span>
           </label>
           <label>
             <span className="form-label-caption">
               Expected daily website visitors <span className="optional">(optional)</span>
+              <InfoTip text="Public/e-commerce traffic. Leave empty if not applicable." />
             </span>
             <input
               type="number"
@@ -308,6 +306,7 @@ export function ProposalToolboxWidget({
         <label className="toolbox-notes-label">
           <span className="form-label-caption">
             Additional context <span className="optional">(optional)</span>
+            <InfoTip text="Customer name, regions, key modules, integrations, constraints, and timeline." />
           </span>
           <textarea
             className="toolbox-textarea"
