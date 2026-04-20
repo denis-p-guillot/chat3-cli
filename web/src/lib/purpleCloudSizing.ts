@@ -138,15 +138,20 @@ export function recommendFromGrid(
   }
 }
 
-/** Catalog Odoo workers × this factor for production proposals (+50% headroom). */
-export const PRODUCTION_WORKER_DISPLAY_MULTIPLIER = 1.5
+/** Double production-oriented specs: catalog workers × this in tables; capacity match uses same factor in the builder. */
+export const PRODUCTION_INSTANCE_SPEC_MULTIPLIER = 2
+
+/** @deprecated alias — use {@link PRODUCTION_INSTANCE_SPEC_MULTIPLIER} */
+export const PRODUCTION_WORKER_DISPLAY_MULTIPLIER = PRODUCTION_INSTANCE_SPEC_MULTIPLIER
 
 export type FormatRecommendationForPromptOptions = {
   /**
-   * When not `1`, the **Workers (Odoo)** table column shows `catalog × multiplier`
-   * (e.g. 1.5 for +50% production headroom), with the catalog baseline noted.
+   * When not `1`, the **Workers (Odoo)** column shows `catalog workers × multiplier`
+   * (default **2** = double for production in scope), with the catalog baseline noted.
    */
   workerDisplayMultiplier?: number
+  /** Weighted capacity base before production doubling (for caption only). */
+  productionMatchingNeedBase?: number
 }
 
 function formatWorkersDisplayValue(workersOdoo: number): string {
@@ -161,12 +166,12 @@ export function formatRecommendationForPrompt(
   const workerMult = options?.workerDisplayMultiplier ?? 1
   const tierLabel =
     rec.productionTier === 'PERFORMANCE'
-      ? 'PERFORMANCE — catalog rows whose **Product Name** starts with `AWS`'
-      : 'VALUE — catalog rows whose **Product Name** starts with `DO`'
+      ? '**PERFORMANCE** tier (internal catalog slice only—**never** paste hardware-style product codes to the customer)'
+      : '**VALUE** tier (internal catalog slice only—**never** paste hardware-style product codes to the customer)'
   const lines: string[] = [
     '## PurpleCloud hosting grid — sizing (mandatory)',
     '',
-    `- **Production profile:** ${tierLabel}. Recommendations below are drawn **only** from this slice.`,
+    `- **Sizing tier:** ${tierLabel}. Rows below are selected from that slice; communicate sizing to the prospect using **Odoo workers** (and public yearly amounts)—not raw catalog product codes.`,
     `- **ERP users (input):** ${rec.erpUsers.toLocaleString()} — treated as **heavy** Odoo users (not “light” seats).`,
     `- **ERP → capacity weighting:** each ERP user counts as **${rec.erpHeavyFactor}** light-user capacity units (\`ceil(ERP users × ${rec.erpHeavyFactor})\`) so worker counts align with interactive ERP load.`,
     `- **Expected daily website visitors:** ${
@@ -174,13 +179,19 @@ export function formatRecommendationForPrompt(
         ? 'not specified'
         : rec.dailyVisitors.toLocaleString()
     }`,
-    `- **Computed capacity need (matches “Light users” column):** ${rec.needLightUsers.toLocaleString()} (= weighted ERP load + visitor load: +1 per 25,000 daily visitors when visitors are provided)`,
-    '',
+    ...(options?.productionMatchingNeedBase != null && workerMult !== 1
+      ? [
+          `- **Computed capacity need (matches “Light users” column for catalog matching):** ${rec.needLightUsers.toLocaleString()} (= **${workerMult}×** the weighted base **${options.productionMatchingNeedBase.toLocaleString()}**, where base = ERP load + visitor load: +1 per 25,000 daily visitors when visitors are provided).`,
+          '',
+        ]
+      : [
+          `- **Computed capacity need (matches “Light users” column):** ${rec.needLightUsers.toLocaleString()} (= weighted ERP load + visitor load: +1 per 25,000 daily visitors when visitors are provided)`,
+          '',
+        ]),
   ]
   if (workerMult !== 1) {
-    const pct = Math.round((workerMult - 1) * 100)
     lines.push(
-      `- **Odoo workers (production uplift):** because this proposal includes a **Production** instance, the **Workers (Odoo)** values in the tables below are **catalog workers × ${workerMult}** (+${pct}% vs the bundled grid). The **Cloud specifications** blocks remain verbatim from the catalog—when writing the proposal, present the **uplifted** worker count as the recommended production target and mention the catalog baseline for traceability.`,
+      `- **Odoo workers (production):** **Workers (Odoo)** in the tables below are **catalog workers × ${workerMult}** (double vs raw catalog for production-grade specs). In the **customer proposal**, lead with these **Odoo worker** targets—do not paste internal SKU / hostname-style strings.`,
       '',
     )
   }
@@ -197,19 +208,14 @@ export function formatRecommendationForPrompt(
         ? `${formatWorkersDisplayValue(workersAdjusted)} (catalog ${formatWorkersDisplayValue(r.workersOdoo)} × ${workerMult} for production)`
         : formatWorkersDisplayValue(r.workersOdoo)
     return [
-      `### ${label}: \`${r.productName}\``,
+      `### ${label}`,
+      '_Internal row — do not disclose catalog SKU / product code to the customer._',
       '',
-      '| Column | Value |',
+      '| Metric | Value |',
       '| --- | --- |',
-      `| Light users | ${r.lightUsers} |`,
-      `| Workers (Odoo) | ${workersCell} |`,
+      `| Light users (catalog) | ${r.lightUsers} |`,
+      `| **Odoo workers (target)** | **${workersCell}** |`,
       `| Yearly public B2C (USD) | ${r.yearlyPriceUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} |`,
-      '',
-      '**Cloud specifications (verbatim from grid):**',
-      '',
-      '```',
-      r.cloudSpecifications.trim(),
-      '```',
       '',
     ].join('\n')
   }
@@ -221,13 +227,13 @@ export function formatRecommendationForPrompt(
   lines.push(
     '**Rules for the proposal:**',
     '',
-    '- Base **infrastructure need** and **yearly public pricing** on the rows above only; **do not invent** SKUs or yearly amounts.',
+    '- Base **yearly public B2C (USD)** on the amounts above only; **do not invent** prices. **Do not** include internal catalog product codes in customer-facing text—describe technical sizing with **Odoo workers** from the table only.',
     ...(workerMult !== 1
       ? [
-          `- **Production worker uplift:** use the **Workers (Odoo)** values already scaled to **+${Math.round((workerMult - 1) * 100)}%** in the tables for any **production**-grade sizing narrative; do not reduce them back to the raw catalog figure without justification.`,
+          `- **Production doubling:** catalog matching and **Odoo workers** already use **×${workerMult}** for production in scope; keep that headroom in the narrative.`,
         ]
       : []),
-    `- **PERFORMANCE** proposals must reference **AWS-** SKUs only; **VALUE** proposals must reference **DO-** SKUs only (already enforced by the slice above).`,
+    '- **PERFORMANCE** vs **VALUE** is enforced by the internal tier slice only—never paste raw SKU strings to the prospect.',
     '- You may phrase alternatives as “starting from” the primary row; mention alternates briefly.',
     '- If overflow applies, state clearly that sizing exceeds the bundled catalog excerpt and requires validation.',
     '',

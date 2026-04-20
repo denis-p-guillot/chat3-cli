@@ -8,7 +8,7 @@ import {
   ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
   filterProductGridForProductionTier,
   formatRecommendationForPrompt,
-  PRODUCTION_WORKER_DISPLAY_MULTIPLIER,
+  PRODUCTION_INSTANCE_SPEC_MULTIPLIER,
   recommendFromGrid,
 } from './purpleCloudSizing'
 import { PURPLE_CLOUD_PRODUCT_GRID } from './purpleCloudProductGrid'
@@ -150,14 +150,12 @@ export function resolveCatalogTierForSizing(form: ProposalFormState): ProposalPr
 
 function tierCatalogExplain(tier: ProposalProductionTier): string {
   return tier === 'PERFORMANCE'
-    ? '**PERFORMANCE** — catalog SKUs whose names **begin with `AWS`**.'
-    : '**VALUE** — catalog SKUs whose names **begin with `DO`**.'
+    ? '**PERFORMANCE** — internal high-throughput catalog slice (matching only; do not quote raw product codes to the customer).'
+    : '**VALUE** — internal cost-efficient catalog slice (matching only; do not quote raw product codes to the customer).'
 }
 
 function tierSkuBlurb(tier: ProposalProductionTier): string {
-  return tier === 'PERFORMANCE'
-    ? 'PERFORMANCE (AWS-prefixed catalog SKUs)'
-    : 'VALUE (DO-prefixed catalog SKUs)'
+  return tier === 'PERFORMANCE' ? 'PERFORMANCE tier' : 'VALUE tier'
 }
 
 /**
@@ -191,9 +189,12 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
         : 'No DO (VALUE) catalog rows are available for sizing.',
     )
   }
-  const need = computeLightUserNeed(erp, dailyVisitors, {
+  const needBase = computeLightUserNeed(erp, dailyVisitors, {
     erpHeavyFactor: ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
   })
+  const need = form.includeProductionInstance
+    ? Math.ceil(needBase * PRODUCTION_INSTANCE_SPEC_MULTIPLIER)
+    : needBase
   const rec = recommendFromGrid(tierGrid, need, {
     erpUsers: erp,
     dailyVisitors,
@@ -202,9 +203,8 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     erpHeavyFactor: ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
   })
   const gridSection = formatRecommendationForPrompt(rec, {
-    workerDisplayMultiplier: form.includeProductionInstance
-      ? PRODUCTION_WORKER_DISPLAY_MULTIPLIER
-      : 1,
+    workerDisplayMultiplier: form.includeProductionInstance ? PRODUCTION_INSTANCE_SPEC_MULTIPLIER : 1,
+    productionMatchingNeedBase: form.includeProductionInstance ? needBase : undefined,
   })
 
   const notes = form.extraNotes.trim()
@@ -234,8 +234,8 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
         : '**Development** instance tier (only development included).'
 
   const deliverableArchitecture = form.includeProductionInstance
-    ? '3. **Architecture (high level)** — align to the **primary** grid recommendation unless you justify an alternate; when **Production** is in scope, use the **Workers (Odoo)** values from the sizing tables (**catalog × 1.5**, +50% headroom for production); reconcile grid **SSD / storage** with the stated **file store (GB)**; dedicated hosting, region/data residency from additional context if any.'
-    : '3. **Architecture (high level)** — align to the **primary** grid recommendation unless you justify an alternate; reconcile grid **SSD / storage** with the stated **file store (GB)**; dedicated hosting, region/data residency from additional context if any.'
+    ? '3. **Architecture (high level)** — align to the **primary** sizing profile unless you justify an alternate; when **Production** is in scope, **Odoo workers** in the sizing tables are **double** the raw catalog figure (×2) and catalog matching already used **2×** capacity need—**do not** quote internal product codes; relate **file store (GB)** to the proposed worker headroom in plain language; dedicated hosting, region/data residency from additional context if any.'
+    : '3. **Architecture (high level)** — align to the **primary** sizing profile unless you justify an alternate; relate **file store (GB)** to the proposed **Odoo worker** headroom in plain language; dedicated hosting, region/data residency from additional context if any.'
 
   return [
     '[PurpleCloud Proposal]',
@@ -243,7 +243,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     'You are drafting a commercial proposal for a **dedicated Odoo** hosting deployment using **PurpleCloud** (https://purple-cloud.ai): an Odoo-focused cloud platform with dedicated servers, automated backups, security (including Cloudflare protection), monitoring, Git-based CI/CD, and separate environments (development, staging, production).',
     '',
     '## Confirmed inputs (use exactly as stated; do not change edition or version)',
-    `- **Language (proposal output):** ${languageLabel} — write the **entire** proposal (all sections, headings, narrative, and bullets) in **${languageLabel}**. Product names, technical labels, and USD amounts from the sizing grid may match the grid verbatim where needed.`,
+    `- **Language (proposal output):** ${languageLabel} — write the **entire** proposal (all sections, headings, narrative, and bullets) in **${languageLabel}**. Use **Odoo workers** and **public yearly USD** from the sizing section; **do not** paste internal catalog product codes.`,
     `- **Odoo version:** ${form.odooVersion.trim()}`,
     `- **Edition:** ${editionLabel}`,
     '',
@@ -251,9 +251,9 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     `- **Development instance:** ${devLine}`,
     `- **Staging instance:** ${stagingLine}`,
     `- **Production instance:** ${prodLine}`,
-    `- **Sizing catalog profile (${catalogTier}):** ${tierExplain} The hosting grid below is matched using **${catalogTier}** because: ${sizingDriver} Reflect each included environment in scope and pricing narrative; use the grid row(s) for the sizing profile and align other environments to the correct SKU families (AWS vs DO) per their tiers.`,
+    `- **Sizing catalog profile (${catalogTier}):** ${tierExplain} The grid below is matched using **${catalogTier}** because: ${sizingDriver} Reflect each included environment in scope; align narrative to **PERFORMANCE** vs **VALUE** per environment without exposing raw catalog strings.`,
     `- **ERP users (internal Odoo users):** ${erp.toLocaleString()}`,
-    `- **File store size:** ${fileStoreGb.toLocaleString()} GB — Odoo filestore / attachments storage the customer needs (compare to **SSD storage** in the grid’s cloud specifications; state if the primary SKU is tight, adequate, or undersized and whether upsell / add-on storage is needed).`,
+    `- **File store size:** ${fileStoreGb.toLocaleString()} GB — Odoo filestore / attachments the customer needs; compare to the disk implied by the chosen **Odoo worker** profile and state if more storage should be sold separately.`,
     `- **Website / daily visitors:** ${visitorsLine}`,
     '',
     gridSection,
@@ -261,15 +261,15 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     notesBlock,
     '',
     '## Deliverable',
-    `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}** (except where quoting grid product names/figures). **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Infrastructure need and yearly public B2C pricing must follow the “PurpleCloud hosting grid — sizing” section above** (same column meanings as the commercial grid: Product Name, Light users, Cloud Specifications, Workers Odoo, yearly public B2C in USD). Include:`,
+    `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}**. **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Capacity and pricing** must follow the “PurpleCloud hosting grid — sizing” section above using **Odoo workers** and **yearly public B2C (USD)** only—**never** quote internal catalog product codes (e.g. host-style SKU strings). Include:`,
     '',
     '1. **Executive summary** — business value; why dedicated PurpleCloud versus self-managed infrastructure.',
     '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); the confirmed **file store (GB)** target; modules only where mentioned in additional context.',
     deliverableArchitecture,
-    '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with the **Cloud specifications** text of the chosen row(s).',
-    '5. **Security** — high-level posture from those specifications; do not fabricate certifications or contractual SLAs.',
-    `6. **Assumptions & exclusions** — explicit bullet list (include which of **Development / Staging / Production** instances are in scope; rule: **PERFORMANCE Production ⇒ PERFORMANCE Staging** when both are included; Dev may be PERFORMANCE or VALUE independently; sizing method: capacity need = ceil(ERP users × heavy factor) + ceil(daily visitors / 25,000) when visitors are provided; catalog slice is **AWS-only for PERFORMANCE** and **DO-only for VALUE** per the sizing profile; ERP users are **heavy** load;${form.includeProductionInstance ? ' when **Production** is in scope, **Workers (Odoo)** in the sizing tables are **+50%** vs catalog baseline;' : ''} include **file store (GB)** vs catalog disk).`,
-    '7. **Commercial structure** — **use the exact Product Name(s) and yearly public B2C (USD) amounts** from the primary (and optionally alternate) rows above. You may label them as public list prices. Do **not** invent SKUs or yearly amounts outside those rows.',
+    '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with dedicated Odoo hosting at the proposed **worker** level.',
+    '5. **Security** — high-level posture appropriate to dedicated Odoo hosting; do not fabricate certifications or contractual SLAs.',
+    `6. **Assumptions & exclusions** — explicit bullet list (include which of **Development / Staging / Production** instances are in scope; rule: **PERFORMANCE Production ⇒ PERFORMANCE Staging** when both are included; Dev may be PERFORMANCE or VALUE independently; sizing: weighted capacity base = ceil(ERP users × heavy factor) + visitor term;${form.includeProductionInstance ? ' when **Production** is in scope, catalog matching uses **2×** that base and **Workers (Odoo)** in the tables are **2×** the raw catalog figure;' : ''} internal tier slice follows **PERFORMANCE** vs **VALUE**; ERP users are **heavy** load; include **file store (GB)** vs implied disk).`,
+    '7. **Commercial structure** — use the **yearly public B2C (USD)** amounts from the primary (and optionally alternate) rows in the sizing section as list prices. **Do not** name internal catalog product codes; anchor the offer on **Odoo workers** and price.',
     '8. **Timeline & milestones** — onboarding, UAT, go-live.',
     '9. **Next steps** — information needed from the customer and suggested follow-up.',
     '',
