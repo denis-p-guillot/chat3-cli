@@ -19,7 +19,6 @@ export type SshFormState = {
 }
 
 type ConnectivityWidgetProps = {
-  open: boolean
   busy: boolean
   error: string | null
   editorOpen: boolean
@@ -27,7 +26,6 @@ type ConnectivityWidgetProps = {
   form: SshFormState
   connections: SshConnection[]
   sshDragType: string
-  onToggleOpen: () => void
   onStartNew: () => void
   onCloseEditor: () => void
   onFormChange: (next: SshFormState) => void
@@ -38,7 +36,6 @@ type ConnectivityWidgetProps = {
 }
 
 export function ConnectivityWidget({
-  open,
   busy,
   error,
   editorOpen,
@@ -46,7 +43,6 @@ export function ConnectivityWidget({
   form,
   connections,
   sshDragType,
-  onToggleOpen,
   onStartNew,
   onCloseEditor,
   onFormChange,
@@ -63,20 +59,10 @@ export function ConnectivityWidget({
           <button type="button" className="workspace-refresh-btn" onClick={onStartNew} disabled={busy}>
             New
           </button>
-          <button
-            type="button"
-            className="workspace-refresh-btn"
-            onClick={onToggleOpen}
-            aria-label={open ? 'Collapse connectivity section' : 'Expand connectivity section'}
-          >
-            {open ? 'Hide' : 'Show'}
-          </button>
         </span>
       </h2>
       {error && <p className="warn">{error}</p>}
-      {open && (
-        <>
-          {editorOpen && (
+      {editorOpen && (
             <form
               className="ssh-form"
               onSubmit={(e) => {
@@ -176,7 +162,7 @@ export function ConnectivityWidget({
                       e.dataTransfer.setData(sshDragType, c.name)
                       e.dataTransfer.effectAllowed = 'copy'
                     }}
-                    title="Drag to Toolbox > Diagnose Error."
+                    title="Drag to Diagnose Error widget."
                   >
                     <strong>{c.name}</strong>
                     <span>
@@ -209,8 +195,6 @@ export function ConnectivityWidget({
               ))}
             </div>
           )}
-        </>
-      )}
     </div>
   )
 }

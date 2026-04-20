@@ -46,11 +46,13 @@ import {
   validateProposalForm,
 } from './lib/proposalPrompt'
 import { renderDiagnoseHtmlReport, runDiagnoseErrorStream } from './lib/tools'
-import { ToolboxWidget } from './components/ToolboxWidget'
+import { DiagnoseToolboxWidget } from './components/DiagnoseToolboxWidget'
+import { ProposalToolboxWidget } from './components/ProposalToolboxWidget'
 import { ConnectivityWidget, type SshFormState } from './components/ConnectivityWidget'
 import { WorkspaceFilesWidget } from './components/WorkspaceFilesWidget'
 import { EnvironmentWidget } from './components/EnvironmentWidget'
 import { AccountWidget } from './components/AccountWidget'
+import { DEFAULT_SIDEBAR_WIDGETS, type SidebarWidgetsState, parseSidebarWidgets } from './lib/sidebarWidgets'
 import './App.css'
 
 const WORKSPACE_PATH_DRAG_TYPE = 'application/x-purplecloud-workspace-path'
@@ -207,21 +209,54 @@ function IconClear({ className }: { className?: string }) {
   )
 }
 
-function IconToolbox({ className }: { className?: string }) {
+function IconSidebarAccount({ className }: { className?: string }) {
   return (
-    <svg
-      className={className}
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      aria-hidden
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 8.5h18v10A2.5 2.5 0 0118.5 21h-13A2.5 2.5 0 013 18.5v-10z" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 8.5V6.8A1.8 1.8 0 0110.8 5h2.4A1.8 1.8 0 0115 6.8v1.7" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M3 12.5h18" />
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M20 21a8 8 0 10-16 0" />
+      <circle cx="12" cy="8.5" r="3.5" />
+    </svg>
+  )
+}
+
+function IconSidebarDiagnose({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12h3M10 6v12M15 4.5v15M19.5 9h-3" />
+    </svg>
+  )
+}
+
+function IconSidebarProposal({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6M9 16h6M7 4h7l5 5v13a1 1 0 01-1 1H7a2 2 0 01-2-2V6a2 2 0 012-2z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14 4v4h4" />
+    </svg>
+  )
+}
+
+function IconSidebarConnectivity({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 20l-4-4 4-4M16 4l4 4-4 4M10.5 13.5l3-3" />
+    </svg>
+  )
+}
+
+function IconSidebarEnvironment({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <rect x="3.5" y="4" width="17" height="14" rx="2" />
+      <path strokeLinecap="round" d="M7 8.5h5M7 12h10M7 15.5h7" />
+    </svg>
+  )
+}
+
+function IconSidebarWorkspaceFiles({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 6.5A2.5 2.5 0 016.5 4H14l4 4v11.5A2.5 2.5 0 0115.5 20h-9A2.5 2.5 0 014 17.5V6.5z" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14 4v4h4" />
     </svg>
   )
 }
@@ -488,16 +523,13 @@ function ChatSession({
   const [workspaceFilesBusy, setWorkspaceFilesBusy] = useState(false)
   const [workspaceFilesErr, setWorkspaceFilesErr] = useState<string | null>(null)
   const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
-  const [workspaceFilesOpen, setWorkspaceFilesOpen] = useState(false)
   const [workspaceSearch, setWorkspaceSearch] = useState('')
   const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
   /** Hide auto-expanded issue_analysis.html row until MD is unpinned or workspace changes. */
   const [suppressedHtmlPaths, setSuppressedHtmlPaths] = useState<string[]>([])
-  const [environmentOpen, setEnvironmentOpen] = useState(false)
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
   const [sshBusy, setSshBusy] = useState(false)
   const [sshErr, setSshErr] = useState<string | null>(null)
-  const [sshOpen, setSshOpen] = useState(false)
   const [sshEditorOpen, setSshEditorOpen] = useState(false)
   const [sshEditingName, setSshEditingName] = useState<string | null>(null)
   const [sshForm, setSshForm] = useState<SshFormState>({
@@ -509,7 +541,8 @@ function ChatSession({
     private_key: '',
     password: '',
   })
-  const [toolboxOpen, setToolboxOpen] = useState(false)
+  const [sidebarWidgets, setSidebarWidgets] = useState<SidebarWidgetsState>(DEFAULT_SIDEBAR_WIDGETS)
+  const [sidebarWidgetsHydrated, setSidebarWidgetsHydrated] = useState(false)
   const [diagnoseBusy, setDiagnoseBusy] = useState(false)
   const [diagnoseErr, setDiagnoseErr] = useState<string | null>(null)
   const [diagnoseContext, setDiagnoseContext] = useState('')
@@ -615,6 +648,41 @@ function ChatSession({
       /* ignore local storage write failures */
     }
   }, [me.id, pinnedPathsHydrated, pendingWorkspacePaths])
+
+  useEffect(() => {
+    setSidebarWidgetsHydrated(false)
+    const key = `pc:sidebarWidgets:${me.id}`
+    try {
+      const raw = window.localStorage.getItem(key)
+      if (raw) setSidebarWidgets(parseSidebarWidgets(JSON.parse(raw)))
+      else setSidebarWidgets({ ...DEFAULT_SIDEBAR_WIDGETS })
+    } catch {
+      setSidebarWidgets({ ...DEFAULT_SIDEBAR_WIDGETS })
+    }
+    setSidebarWidgetsHydrated(true)
+  }, [me.id])
+
+  useEffect(() => {
+    if (!sidebarWidgetsHydrated) return
+    const key = `pc:sidebarWidgets:${me.id}`
+    try {
+      window.localStorage.setItem(key, JSON.stringify(sidebarWidgets))
+    } catch {
+      /* ignore */
+    }
+  }, [me.id, sidebarWidgetsHydrated, sidebarWidgets])
+
+  const toggleSidebarWidget = (id: keyof SidebarWidgetsState) => {
+    setSidebarWidgets((w) => {
+      const next = !w[id]
+      if (id === 'diagnose' && !next) setToolboxDragOver(false)
+      if ((id === 'diagnose' || id === 'proposal') && !next) {
+        setDiagnoseErr(null)
+        setProposalErr(null)
+      }
+      return { ...w, [id]: next }
+    })
+  }
 
   const effectivePinnedPaths = useMemo(
     () => expandPinnedWorkspacePaths(pendingWorkspacePaths).filter((p) => !suppressedHtmlPaths.includes(p)),
@@ -1022,7 +1090,7 @@ function ChatSession({
   }
 
   const startNewSsh = () => {
-    setSshOpen(true)
+    setSidebarWidgets((w) => ({ ...w, connectivity: true }))
     setSshEditorOpen(true)
     setSshEditingName(null)
     setSshForm({
@@ -1037,7 +1105,7 @@ function ChatSession({
   }
 
   const editSsh = (c: SshConnection) => {
-    setSshOpen(true)
+    setSidebarWidgets((w) => ({ ...w, connectivity: true }))
     setSshEditorOpen(true)
     setSshEditingName(c.name)
     setSshForm({
@@ -1106,7 +1174,6 @@ function ChatSession({
         addPendingWorkspacePath(out.path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html'))
       }
       await refreshWorkspaceFiles()
-      setToolboxOpen(false)
       setDiagnoseContext('')
       setDiagnoseSshConnections([])
       const finalLines: string[] = []
@@ -1183,7 +1250,6 @@ function ChatSession({
       const text = buildPurpleCloudProposalRequest(proposalForm)
       await send({ text })
       setProposalForm(emptyProposalForm())
-      setToolboxOpen(false)
       pushNotice('PurpleCloud proposal request sent.', 'success')
     } catch (err) {
       setProposalErr(err instanceof Error ? err.message : String(err))
@@ -1221,120 +1287,175 @@ function ChatSession({
               <p className="tagline">Version 0.6</p>
             </div>
           </div>
-          <div className="brand-toolbar" role="toolbar" aria-label="Account actions">
-            <button
-              type="button"
-              className={`icon-btn ${toolboxOpen ? 'icon-btn-active' : ''}`}
-              onClick={() => {
-                setToolboxOpen((v) => !v)
-                setDiagnoseErr(null)
-                setProposalErr(null)
-                setToolboxDragOver(false)
-              }}
-              title="Toolbox"
-              aria-label="Toolbox"
-            >
-              <IconToolbox />
-            </button>
-            <button
-              type="button"
-              className="icon-btn"
-              onClick={() => setSettingsOpen(true)}
-              title="Settings — API key and profile"
-              aria-label="Settings"
-            >
-              <IconSettings />
-            </button>
-            <button
-              type="button"
-              className="icon-btn icon-btn-logout"
-              onClick={() => {
-                void onLogout()
-              }}
-              title="Log out"
-              aria-label="Log out"
-            >
-              <IconLogout />
-            </button>
+          <div className="brand-toolbar">
+            <div className="brand-toolbar-widgets" role="toolbar" aria-label="Show or hide sidebar panels">
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.account ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('account')}
+                title="Account & workspace"
+                aria-label="Toggle Account & workspace panel"
+                aria-pressed={sidebarWidgets.account}
+              >
+                <IconSidebarAccount />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.diagnose ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('diagnose')}
+                title="Diagnose Error"
+                aria-label="Toggle Diagnose Error panel"
+                aria-pressed={sidebarWidgets.diagnose}
+              >
+                <IconSidebarDiagnose />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.proposal ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('proposal')}
+                title="Proposal"
+                aria-label="Toggle Proposal panel"
+                aria-pressed={sidebarWidgets.proposal}
+              >
+                <IconSidebarProposal />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.connectivity ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('connectivity')}
+                title="Connectivity (SSH)"
+                aria-label="Toggle Connectivity panel"
+                aria-pressed={sidebarWidgets.connectivity}
+              >
+                <IconSidebarConnectivity />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.environment ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('environment')}
+                title="Environment"
+                aria-label="Toggle Environment panel"
+                aria-pressed={sidebarWidgets.environment}
+              >
+                <IconSidebarEnvironment />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${sidebarWidgets.workspaceFiles ? 'icon-btn-active' : ''}`}
+                onClick={() => toggleSidebarWidget('workspaceFiles')}
+                title="Workspace files"
+                aria-label="Toggle Workspace files panel"
+                aria-pressed={sidebarWidgets.workspaceFiles}
+              >
+                <IconSidebarWorkspaceFiles />
+              </button>
+            </div>
+            <div className="brand-toolbar-actions" role="toolbar" aria-label="Account actions">
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setSettingsOpen(true)}
+                title="Settings — API key and profile"
+                aria-label="Settings"
+              >
+                <IconSettings />
+              </button>
+              <button
+                type="button"
+                className="icon-btn icon-btn-logout"
+                onClick={() => {
+                  void onLogout()
+                }}
+                title="Log out"
+                aria-label="Log out"
+              >
+                <IconLogout />
+              </button>
+            </div>
           </div>
         </div>
 
-        <ToolboxWidget
-          open={toolboxOpen}
-          dragOver={toolboxDragOver}
-          chatBusy={busy}
-          diagnoseBusy={diagnoseBusy}
-          diagnoseErr={diagnoseErr}
-          diagnoseContext={diagnoseContext}
-          diagnoseSshConnections={diagnoseSshConnections}
-          proposalBusy={proposalBusy}
-          proposalErr={proposalErr}
-          proposalForm={proposalForm}
-          sshDragType={SSH_CONNECTION_DRAG_TYPE}
-          onDragOverState={setToolboxDragOver}
-          onDropSshConnection={addDiagnoseSshConnection}
-          onRemoveDiagnoseSshConnection={removeDiagnoseSshConnection}
-          onDiagnoseContextChange={setDiagnoseContext}
-          onRunDiagnose={() => void diagnoseError()}
-          onProposalFormChange={(patch) => setProposalForm((prev) => ({ ...prev, ...patch }))}
-          onRunProposal={() => void runProposal()}
-        />
+        {sidebarWidgets.account && (
+          <AccountWidget
+            me={me}
+            workspaceList={workspaceList}
+            workspaceBusy={workspaceBusy}
+            busy={busy}
+            historyHydrated={historyHydrated}
+            onSwitchWorkspace={(id) => void switchWorkspace(id)}
+            onAddWorkspace={() => void addWorkspace()}
+          />
+        )}
 
-        <AccountWidget
-          me={me}
-          workspaceList={workspaceList}
-          workspaceBusy={workspaceBusy}
-          busy={busy}
-          historyHydrated={historyHydrated}
-          onSwitchWorkspace={(id) => void switchWorkspace(id)}
-          onAddWorkspace={() => void addWorkspace()}
-        />
+        {sidebarWidgets.diagnose && (
+          <DiagnoseToolboxWidget
+            dragOver={toolboxDragOver}
+            diagnoseBusy={diagnoseBusy}
+            diagnoseErr={diagnoseErr}
+            diagnoseContext={diagnoseContext}
+            diagnoseSshConnections={diagnoseSshConnections}
+            sshDragType={SSH_CONNECTION_DRAG_TYPE}
+            onDragOverState={setToolboxDragOver}
+            onDropSshConnection={addDiagnoseSshConnection}
+            onRemoveDiagnoseSshConnection={removeDiagnoseSshConnection}
+            onDiagnoseContextChange={setDiagnoseContext}
+            onRunDiagnose={() => void diagnoseError()}
+          />
+        )}
 
-        <ConnectivityWidget
-          open={sshOpen}
-          busy={sshBusy}
-          error={sshErr}
-          editorOpen={sshEditorOpen}
-          editingName={sshEditingName}
-          form={sshForm}
-          connections={sshConnections}
-          sshDragType={SSH_CONNECTION_DRAG_TYPE}
-          onToggleOpen={() => setSshOpen((v) => !v)}
-          onStartNew={startNewSsh}
-          onCloseEditor={() => {
-            setSshEditorOpen(false)
-            setSshEditingName(null)
-          }}
-          onFormChange={setSshForm}
-          onSubmit={() => void submitSsh()}
-          onEdit={editSsh}
-          onTest={(id) => void testSsh(id)}
-          onDelete={(id) => void removeSsh(id)}
-        />
+        {sidebarWidgets.proposal && (
+          <ProposalToolboxWidget
+            chatBusy={busy}
+            diagnoseBusy={diagnoseBusy}
+            proposalBusy={proposalBusy}
+            proposalErr={proposalErr}
+            proposalForm={proposalForm}
+            onProposalFormChange={(patch) => setProposalForm((prev) => ({ ...prev, ...patch }))}
+            onRunProposal={() => void runProposal()}
+          />
+        )}
 
-        <EnvironmentWidget
-          open={environmentOpen}
-          onToggle={() => setEnvironmentOpen((v) => !v)}
-          meta={meta}
-          metaErr={metaErr}
-          shortPath={shortPath}
-        />
+        {sidebarWidgets.connectivity && (
+          <ConnectivityWidget
+            busy={sshBusy}
+            error={sshErr}
+            editorOpen={sshEditorOpen}
+            editingName={sshEditingName}
+            form={sshForm}
+            connections={sshConnections}
+            sshDragType={SSH_CONNECTION_DRAG_TYPE}
+            onStartNew={startNewSsh}
+            onCloseEditor={() => {
+              setSshEditorOpen(false)
+              setSshEditingName(null)
+            }}
+            onFormChange={setSshForm}
+            onSubmit={() => void submitSsh()}
+            onEdit={editSsh}
+            onTest={(id) => void testSsh(id)}
+            onDelete={(id) => void removeSsh(id)}
+          />
+        )}
 
-        <WorkspaceFilesWidget
-          open={workspaceFilesOpen}
-          busy={workspaceFilesBusy}
-          error={workspaceFilesErr}
-          truncated={workspaceFilesTruncated}
-          entries={workspaceEntries}
-          search={workspaceSearch}
-          pendingWorkspacePaths={pendingWorkspacePaths}
-          workspaceDragType={WORKSPACE_PATH_DRAG_TYPE}
-          onToggleOpen={() => setWorkspaceFilesOpen((v) => !v)}
-          onRefresh={() => void refreshWorkspaceFiles()}
-          onSearchChange={setWorkspaceSearch}
-          onLinkPath={addPendingWorkspacePath}
-          formatSize={formatSize}
-        />
+        {sidebarWidgets.environment && (
+          <EnvironmentWidget meta={meta} metaErr={metaErr} shortPath={shortPath} />
+        )}
+
+        {sidebarWidgets.workspaceFiles && (
+          <WorkspaceFilesWidget
+            busy={workspaceFilesBusy}
+            error={workspaceFilesErr}
+            truncated={workspaceFilesTruncated}
+            entries={workspaceEntries}
+            search={workspaceSearch}
+            pendingWorkspacePaths={pendingWorkspacePaths}
+            workspaceDragType={WORKSPACE_PATH_DRAG_TYPE}
+            onRefresh={() => void refreshWorkspaceFiles()}
+            onSearchChange={setWorkspaceSearch}
+            onLinkPath={addPendingWorkspacePath}
+            formatSize={formatSize}
+          />
+        )}
 
         <p className="brand-footer">
           <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">

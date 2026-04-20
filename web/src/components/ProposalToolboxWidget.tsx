@@ -1,114 +1,28 @@
 import type { ProposalFormState } from '../lib/proposalPrompt'
 
-type ToolboxWidgetProps = {
-  open: boolean
-  dragOver: boolean
+type ProposalToolboxWidgetProps = {
   chatBusy: boolean
   diagnoseBusy: boolean
-  diagnoseErr: string | null
-  diagnoseContext: string
-  diagnoseSshConnections: string[]
   proposalBusy: boolean
   proposalErr: string | null
   proposalForm: ProposalFormState
-  sshDragType: string
-  onDragOverState: (v: boolean) => void
-  onDropSshConnection: (name: string) => void
-  onRemoveDiagnoseSshConnection: (name: string) => void
-  onDiagnoseContextChange: (value: string) => void
-  onRunDiagnose: () => void
   onProposalFormChange: (patch: Partial<ProposalFormState>) => void
   onRunProposal: () => void
 }
 
-export function ToolboxWidget({
-  open,
-  dragOver,
+export function ProposalToolboxWidget({
   chatBusy,
   diagnoseBusy,
-  diagnoseErr,
-  diagnoseContext,
-  diagnoseSshConnections,
   proposalBusy,
   proposalErr,
   proposalForm,
-  sshDragType,
-  onDragOverState,
-  onDropSshConnection,
-  onRemoveDiagnoseSshConnection,
-  onDiagnoseContextChange,
-  onRunDiagnose,
   onProposalFormChange,
   onRunProposal,
-}: ToolboxWidgetProps) {
-  if (!open) return null
+}: ProposalToolboxWidgetProps) {
   return (
     <div className="sidebar-section sidebar-widget">
-      <h2>Toolbox</h2>
-      <div
-        className={`toolbox-item ${dragOver ? 'toolbox-drop' : ''}`}
-        onDragEnter={(e) => {
-          const hasSsh = Array.from(e.dataTransfer.types).includes(sshDragType)
-          if (!hasSsh) return
-          e.preventDefault()
-          onDragOverState(true)
-        }}
-        onDragOver={(e) => {
-          const hasSsh = Array.from(e.dataTransfer.types).includes(sshDragType)
-          if (!hasSsh) return
-          e.preventDefault()
-          e.dataTransfer.dropEffect = 'copy'
-        }}
-        onDragLeave={(e) => {
-          if (e.currentTarget.contains(e.relatedTarget as Node)) return
-          onDragOverState(false)
-        }}
-        onDrop={(e) => {
-          e.preventDefault()
-          onDragOverState(false)
-          const name = e.dataTransfer.getData(sshDragType)
-          if (name) onDropSshConnection(name)
-        }}
-      >
-        <h3>Diagnose Error</h3>
-        <p className="muted toolbox-help">
-          Generates <code>issue_analysis.html</code> in the active workspace and links it to your next prompt.
-        </p>
-        <p className="muted toolbox-help">
-          Drag SSH connections from the Connectivity widget here to grant diagnosis SSH scope.
-        </p>
-        {diagnoseSshConnections.length > 0 && (
-          <ul className="toolbox-ssh-list">
-            {diagnoseSshConnections.map((name) => (
-              <li key={name}>
-                <span>{name}</span>
-                <button
-                  type="button"
-                  className="btn-icon"
-                  onClick={() => onRemoveDiagnoseSshConnection(name)}
-                  aria-label={`Remove SSH connection ${name}`}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <textarea
-          className="toolbox-textarea"
-          placeholder="Paste logs, traceback, or incident context..."
-          value={diagnoseContext}
-          onChange={(e) => onDiagnoseContextChange(e.target.value)}
-          rows={5}
-        />
-        {diagnoseErr && <p className="warn">{diagnoseErr}</p>}
-        <button type="button" className="btn secondary" onClick={onRunDiagnose} disabled={diagnoseBusy}>
-          {diagnoseBusy ? 'Generating…' : 'Run Diagnose Error'}
-        </button>
-      </div>
-
+      <h2>Proposal</h2>
       <div className="toolbox-item toolbox-item-proposal">
-        <h3>Proposal</h3>
         <p className="muted toolbox-help">
           Draft a commercial proposal for a <strong>dedicated Odoo</strong> environment on{' '}
           <a href="https://purple-cloud.ai" target="_blank" rel="noreferrer">
