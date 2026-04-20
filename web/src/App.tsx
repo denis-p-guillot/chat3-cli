@@ -54,6 +54,7 @@ import {
 import { renderDiagnoseHtmlReport, runDiagnoseErrorStream } from './lib/tools'
 import { DiagnoseToolboxWidget } from './components/DiagnoseToolboxWidget'
 import { ProposalToolboxWidget } from './components/ProposalToolboxWidget'
+import { UserSubmittedPrompt } from './components/UserSubmittedPrompt'
 import { ConnectivityWidget, type SshFormState } from './components/ConnectivityWidget'
 import { WorkspaceFilesWidget } from './components/WorkspaceFilesWidget'
 import { EnvironmentWidget } from './components/EnvironmentWidget'
@@ -78,6 +79,8 @@ type UserMsg = {
   /** Relative paths under workspace (persisted for API history) */
   workspaceFiles?: string[]
   attachmentSummary?: { name: string; size: number; path: string }[]
+  /** Composer send vs programmatic (proposal, diagnose follow-up, …). */
+  submission?: 'manual' | 'automation'
 }
 
 type ChatMsg =
@@ -912,6 +915,8 @@ function ChatSession({
     linkedPaths?: string[]
     /** Log proposal pipeline steps to the browser console (DevTools). */
     proposalTrace?: boolean
+    /** Defaults to manual when omitted (composer). */
+    submission?: 'manual' | 'automation'
   }): Promise<string> => {
     if (!historyHydrated) return ''
     const text = (opts?.text ?? input).trim()
@@ -982,6 +987,7 @@ function ChatSession({
     }
     setPendingFiles([])
     // Keep pinned workspace links until the user explicitly unpins them.
+    const submission = opts?.submission ?? 'manual'
     setMessages((m) => [
       ...m,
       {
@@ -990,6 +996,7 @@ function ChatSession({
         content: text,
         workspaceFiles: workspacePaths.length ? workspacePaths : undefined,
         attachmentSummary: attachmentSummary.length ? attachmentSummary : undefined,
+        submission,
       },
     ])
     if (workspacePaths.length > 0) {
@@ -1263,7 +1270,11 @@ function ChatSession({
         return prefix ? `${prefix}\n\n${finalBlock}` : finalBlock
       })
       pushNotice(`Diagnostics artifact linked: ${out.name}`, 'success')
-      const followupAssistantRaw = await send({ text: finalBlock, linkedPaths: [out.path] })
+      const followupAssistantRaw = await send({
+        text: finalBlock,
+        linkedPaths: [out.path],
+        submission: 'automation',
+      })
       const followupAssistant = followupAssistantRaw
         .replace(/^done\s*[—-].*$/gim, '')
         .replace(/^.*updated the final report in:.*$/gim, '')
@@ -1329,12 +1340,17 @@ function ChatSession({
           production: proposalForm.includeProductionInstance,
         },
       })
-      const reply = await send({ text, proposalTrace: true })
+      const reply = await send({ text, proposalTrace: true, submission: 'automation' })
       setProposalForm(emptyProposalForm())
       pushNotice('PurpleCloud proposal request sent.', 'success')
       const clean = reply.trim()
-      if (clean.length > 80 && !/^\*\*Error:\*\*/m.test(clean)) {
-        setProposalSlidesBanner({ markdown: clean })
+      const looksLikeAssistantError = /^\*\*Error:\*\*/m.test(clean)
+      if (!looksLikeAssistantError) {
+        setProposalSlidesBanner({
+          markdown:
+            clean ||
+            '_The model returned no text for this run. Download HTML anyway for the PurpleCloud-branded shell, or copy from the assistant message above if it appeared._',
+        })
       }
     } catch (err) {
       console.log('%c[PurpleCloud Proposal]', 'color:#f87171;font-weight:bold', 'Failed:', err)
@@ -1619,8 +1635,8 @@ function ChatSession({
                 </header>
               )}
               {m.role === 'user' && (
-                <>
-                  {m.attachmentSummary && m.attachmentSummary.length > 0 && (
+                <UserSubmittedPrompt content={m.content} submission={m.submission}>
+                  {m.attachmentSummary && m.attachmentSummary.length > 0 ? (
                     <ul className="attach-list" aria-label="Attachments">
                       {m.attachmentSummary.map((a, i) => (
                         <li key={`${i}-${a.path}`}>
@@ -1632,12 +1648,8 @@ function ChatSession({
                         </li>
                       ))}
                     </ul>
-                  )}
-                  {m.content ? <p className="user-text">{m.content}</p> : null}
-                  {!m.content && m.attachmentSummary?.length ? (
-                    <p className="user-text muted">(no message text — attachments only)</p>
                   ) : null}
-                </>
+                </UserSubmittedPrompt>
               )}
               {m.role === 'assistant' && (
                 <div className="md">
@@ -1677,17 +1689,16 @@ function ChatSession({
           <div
             className="proposal-slides-banner"
             role="region"
-            aria-label="Proposal export: HTML download or Google Slides outline"
+            aria-label="Proposal export: download HTML document (required deliverable)"
           >
             <div className="proposal-slides-banner-inner">
               <div className="proposal-slides-banner-copy">
-                <strong>Proposal generated</strong>
+                <strong>Proposal ready — export required</strong>
                 <p className="muted proposal-slides-banner-text">
-                  <strong>Download HTML</strong> keeps tables, typography, and Mermaid diagrams in one file (open in a
-                  browser; <strong>Print → Save as PDF</strong> for PDF). Upload that HTML or PDF to{' '}
-                  <strong>Google Drive</strong> anytime. For <strong>Google Slides</strong>, paste the outline below
-                  (diagrams are omitted there). <strong>Google Docs</strong> does not reliably import this layout—use
-                  HTML/PDF on Drive, or a future Docs API + OAuth integration for native Docs.
+                  Use <strong>Download HTML document</strong> below for the official deliverable (PurpleCloud branding,
+                  tables, Mermaid diagrams). This step is always shown after a successful proposal run. Open the file in
+                  a browser; <strong>Print → Save as PDF</strong> for a PDF. Optional: copy the slide outline or open
+                  Google Slides — diagrams are not included in the outline.
                 </p>
               </div>
               <div className="proposal-slides-banner-actions">
@@ -1725,7 +1736,7 @@ function ChatSession({
                   Copy slide-ready outline
                 </button>
                 <a
-                  className="btn primary proposal-slides-open"
+                  className="btn secondary proposal-slides-open"
                   href={GOOGLE_SLIDES_NEW_URL}
                   target="_blank"
                   rel="noopener noreferrer"

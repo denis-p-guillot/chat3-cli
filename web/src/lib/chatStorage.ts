@@ -7,6 +7,8 @@ export type ChatMsgPersisted =
       content: string
       workspace_files?: string[]
       attachment_summary?: { name: string; size: number; path: string }[]
+      /** manual = composer send; automation = proposal / diagnose pipeline, etc. */
+      submission?: 'manual' | 'automation'
     }
   | { id: string; role: 'assistant'; content: string }
   | { id: string; role: 'tool'; name: string; args: Record<string, unknown>; output: string }
@@ -22,6 +24,7 @@ export function serializeChatMessages(
     content?: string
     workspaceFiles?: string[]
     attachmentSummary?: { name: string; size: number; path: string }[]
+    submission?: 'manual' | 'automation'
     name?: string
     args?: Record<string, unknown>
     output?: string
@@ -36,6 +39,7 @@ export function serializeChatMessages(
         content: m.content ?? '',
         workspace_files: m.workspaceFiles?.length ? [...m.workspaceFiles] : undefined,
         attachment_summary: m.attachmentSummary?.length ? [...m.attachmentSummary] : undefined,
+        ...(m.submission === 'manual' || m.submission === 'automation' ? { submission: m.submission } : {}),
       })
     } else if (m.role === 'assistant') {
       out.push({ id: m.id, role: 'assistant', content: m.content ?? '' })
@@ -62,6 +66,7 @@ export function deserializeChatMessages(rows: ChatMsgPersisted[]) {
         content: r.content ?? '',
         workspaceFiles: r.workspace_files?.length ? [...r.workspace_files] : undefined,
         attachmentSummary: r.attachment_summary?.length ? [...r.attachment_summary] : undefined,
+        submission: r.submission === 'automation' || r.submission === 'manual' ? r.submission : undefined,
       }
     }
     if (r.role === 'assistant') {
