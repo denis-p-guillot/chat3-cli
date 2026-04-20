@@ -9,6 +9,10 @@ import { ensureBrainMermaidTheme } from './mermaidBrainTheme'
 
 marked.setOptions({ gfm: true })
 
+const PURPLECLOUD_SITE_URL = 'https://purple-cloud.ai'
+const PURPLECLOUD_LOGO_URL =
+  'https://purple-cloud.ai/web/image/website/2/logo/PurpleCloud%20-%20Odoo%20Cloud%20Platform-as-a-Service?unique=c506ef0'
+
 const EXPORT_DOC_CSS = `
 :root {
   --bg: #141022;
@@ -128,16 +132,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 3.25rem;
-  height: 3.25rem;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  width: 11.5rem;
+  max-width: 48vw;
+  padding: 0.15rem 0.1rem;
 }
 .export-brand-logo-img {
   display: block;
-  width: 2.35rem;
+  width: 100%;
   height: auto;
+  object-fit: contain;
 }
 .export-brand-text {
   min-width: 0;
@@ -196,6 +199,7 @@ body {
     border-color: #ddd6fe;
     box-shadow: none;
   }
+  .export-brand-logo-img { filter: none; }
   .export-brand-name {
     background: none;
     -webkit-background-clip: unset;
@@ -207,18 +211,6 @@ body {
   .export-brand-link, .export-brand-footer a { color: #5b21b6; }
 }
 `.trim()
-
-/** Inline SVG cloud mark (self-contained; no external asset). */
-const PURPLECLOUD_EXPORT_LOGO_SVG = `<svg class="export-brand-logo-img" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-  <defs>
-    <linearGradient id="pc-export-cloud-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ede9fe"/>
-      <stop offset="45%" stop-color="#a78bfa"/>
-      <stop offset="100%" stop-color="#6d28d9"/>
-    </linearGradient>
-  </defs>
-  <path fill="url(#pc-export-cloud-grad)" d="M4.5 9.75a6 6 0 0 1 11.573-2.226 3.75 3.75 0 0 1 4.133 4.303A4.5 4.5 0 0 1 18 20.25H6.75a5.25 5.25 0 0 1-2.23-10.004 6.072 6.072 0 0 1-.02-.496z"/>
-</svg>`
 
 function wrapExportDocument(bodyInner: string): string {
   const year = new Date().getFullYear()
@@ -235,13 +227,15 @@ function wrapExportDocument(bodyInner: string): string {
 <body>
   <header class="export-brand-header">
     <div class="export-brand-lockup">
-      <div class="export-brand-logo">${PURPLECLOUD_EXPORT_LOGO_SVG}</div>
+      <div class="export-brand-logo">
+        <img class="export-brand-logo-img" src="${PURPLECLOUD_LOGO_URL}" alt="PurpleCloud logo" />
+      </div>
       <div class="export-brand-text">
         <div class="export-brand-name">PurpleCloud</div>
         <div class="export-brand-tagline">Dedicated Odoo hosting — backup, security, CI/CD &amp; monitoring</div>
       </div>
     </div>
-    <a class="export-brand-link" href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">purple-cloud.ai</a>
+    <a class="export-brand-link" href="${PURPLECLOUD_SITE_URL}" target="_blank" rel="noopener noreferrer">purple-cloud.ai</a>
   </header>
   <article class="proposal-doc">${bodyInner}</article>
   <p class="export-footnote">
@@ -250,7 +244,7 @@ function wrapExportDocument(bodyInner: string): string {
     for a Docs-first workflow you would need the Google Docs API with OAuth, or paste sections manually.
   </p>
   <footer class="export-brand-footer">
-    <p><strong>PurpleCloud</strong> · <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">purple-cloud.ai</a></p>
+    <p><strong>PurpleCloud</strong> · <a href="${PURPLECLOUD_SITE_URL}" target="_blank" rel="noopener noreferrer">purple-cloud.ai</a></p>
     <p>© ${year} Purple Cloud. All rights reserved.</p>
   </footer>
 </body>

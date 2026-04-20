@@ -73,7 +73,7 @@ export function ProposalToolboxWidget({
               </select>
             </label>
             <div className="toolbox-commitment-row">
-              <label className="toolbox-env-toggle">
+              <label className="toolbox-env-toggle toolbox-check-chip">
                 <input
                   type="checkbox"
                   checked={proposalForm.commitmentOneYear}
@@ -86,10 +86,10 @@ export function ProposalToolboxWidget({
                     }
                   }}
                 />
-                <span>1-year</span>
+                <span className="toolbox-check-chip-label">1-year</span>
                 <InfoTip text="Include yearly USD pricing column." />
               </label>
-              <label className="toolbox-env-toggle">
+              <label className="toolbox-env-toggle toolbox-check-chip">
                 <input
                   type="checkbox"
                   checked={proposalForm.commitmentThreeYear}
@@ -102,7 +102,7 @@ export function ProposalToolboxWidget({
                     }
                   }}
                 />
-                <span>3-year</span>
+                <span className="toolbox-check-chip-label">3-year</span>
                 <InfoTip text="Include total USD for a 3-year commitment (where published)." />
               </label>
             </div>
@@ -144,71 +144,27 @@ export function ProposalToolboxWidget({
               Odoo instances
               <InfoTip text="Include/exclude each environment. If Production is included, sizing follows Production tier; otherwise Staging, otherwise Development. PERFORMANCE Production requires PERFORMANCE Staging." />
             </p>
-            <label className="toolbox-env-toggle">
-              <input
-                type="checkbox"
-                checked={proposalForm.includeDevInstance}
-                onChange={(e) => onProposalFormChange({ includeDevInstance: e.target.checked })}
-              />
-              <span>Development instance</span>
-            </label>
-            {proposalForm.includeDevInstance && (
-              <div className="toolbox-env-nested">
-                <label>
-                  <span className="form-label-caption">
-                    Dev tier <span className="req">*</span>
-                    <InfoTip text="Catalog family for Development: PERFORMANCE (AWS) or VALUE (DO)." />
-                  </span>
-                  <select
-                    value={proposalForm.devInstanceTier}
-                    onChange={(e) =>
-                      onProposalFormChange({
-                        devInstanceTier: e.target.value as ProposalProductionTier,
-                      })
-                    }
-                  >
-                    <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
-                    <option value="VALUE">VALUE (DO)</option>
-                  </select>
-                </label>
-              </div>
-            )}
-            <label className="toolbox-env-toggle">
-              <input
-                type="checkbox"
-                checked={proposalForm.includeStagingInstance}
-                onChange={(e) => {
-                  const on = e.target.checked
-                  if (
-                    on &&
-                    proposalForm.includeProductionInstance &&
-                    proposalForm.productionTier === 'PERFORMANCE'
-                  ) {
-                    onProposalFormChange({ includeStagingInstance: true, stagingInstanceTier: 'PERFORMANCE' })
-                  } else {
-                    onProposalFormChange({ includeStagingInstance: on })
-                  }
-                }}
-              />
-              <span>Staging instance</span>
-            </label>
-            {proposalForm.includeStagingInstance && (
-              <div className="toolbox-env-nested">
-                {proposalForm.includeProductionInstance && proposalForm.productionTier === 'PERFORMANCE' ? (
-                  <p className="muted toolbox-env-locked">
-                    Staging tier is <strong>PERFORMANCE (AWS)</strong> — required when Production is PERFORMANCE.
-                  </p>
-                ) : (
+            <div className="toolbox-instance-card">
+              <label className="toolbox-env-toggle">
+                <input
+                  type="checkbox"
+                  checked={proposalForm.includeDevInstance}
+                  onChange={(e) => onProposalFormChange({ includeDevInstance: e.target.checked })}
+                />
+                <span>Development instance</span>
+              </label>
+              {proposalForm.includeDevInstance && (
+                <div className="toolbox-env-nested">
                   <label>
                     <span className="form-label-caption">
-                      Staging tier <span className="req">*</span>
-                      <InfoTip text="Catalog family for Staging: PERFORMANCE (AWS) or VALUE (DO)." />
+                      Dev tier <span className="req">*</span>
+                      <InfoTip text="Catalog family for Development: PERFORMANCE (AWS) or VALUE (DO)." />
                     </span>
                     <select
-                      value={proposalForm.stagingInstanceTier}
+                      value={proposalForm.devInstanceTier}
                       onChange={(e) =>
                         onProposalFormChange({
-                          stagingInstanceTier: e.target.value as ProposalProductionTier,
+                          devInstanceTier: e.target.value as ProposalProductionTier,
                         })
                       }
                     >
@@ -216,49 +172,99 @@ export function ProposalToolboxWidget({
                       <option value="VALUE">VALUE (DO)</option>
                     </select>
                   </label>
-                )}
-              </div>
-            )}
-            <label className="toolbox-env-toggle">
-              <input
-                type="checkbox"
-                checked={proposalForm.includeProductionInstance}
-                onChange={(e) => {
-                  const on = e.target.checked
-                  onProposalFormChange(
-                    on
-                      ? { includeProductionInstance: true }
-                      : { includeProductionInstance: false, productionTier: '' },
-                  )
-                }}
-              />
-              <span>Production instance</span>
-            </label>
-            {proposalForm.includeProductionInstance && (
-              <div className="toolbox-env-nested">
-                <label>
-                  <span className="form-label-caption">
-                    Production tier <span className="req">*</span>
-                    <InfoTip text="Catalog family for Production. PERFORMANCE uses AWS rows; VALUE uses DO rows." />
-                  </span>
-                  <select
-                    value={proposalForm.productionTier}
-                    onChange={(e) => {
-                      const v = e.target.value as ProposalFormState['productionTier']
-                      const patch: Partial<ProposalFormState> = { productionTier: v }
-                      if (proposalForm.includeStagingInstance && v === 'PERFORMANCE') {
-                        patch.stagingInstanceTier = 'PERFORMANCE'
-                      }
-                      onProposalFormChange(patch)
-                    }}
-                  >
-                    <option value="">Select…</option>
-                    <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
-                    <option value="VALUE">VALUE (DO)</option>
-                  </select>
-                </label>
-              </div>
-            )}
+                </div>
+              )}
+            </div>
+            <div className="toolbox-instance-card">
+              <label className="toolbox-env-toggle">
+                <input
+                  type="checkbox"
+                  checked={proposalForm.includeStagingInstance}
+                  onChange={(e) => {
+                    const on = e.target.checked
+                    if (
+                      on &&
+                      proposalForm.includeProductionInstance &&
+                      proposalForm.productionTier === 'PERFORMANCE'
+                    ) {
+                      onProposalFormChange({ includeStagingInstance: true, stagingInstanceTier: 'PERFORMANCE' })
+                    } else {
+                      onProposalFormChange({ includeStagingInstance: on })
+                    }
+                  }}
+                />
+                <span>Staging instance</span>
+              </label>
+              {proposalForm.includeStagingInstance && (
+                <div className="toolbox-env-nested">
+                  {proposalForm.includeProductionInstance && proposalForm.productionTier === 'PERFORMANCE' ? (
+                    <p className="muted toolbox-env-locked">
+                      Staging tier is <strong>PERFORMANCE (AWS)</strong> — required when Production is PERFORMANCE.
+                    </p>
+                  ) : (
+                    <label>
+                      <span className="form-label-caption">
+                        Staging tier <span className="req">*</span>
+                        <InfoTip text="Catalog family for Staging: PERFORMANCE (AWS) or VALUE (DO)." />
+                      </span>
+                      <select
+                        value={proposalForm.stagingInstanceTier}
+                        onChange={(e) =>
+                          onProposalFormChange({
+                            stagingInstanceTier: e.target.value as ProposalProductionTier,
+                          })
+                        }
+                      >
+                        <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
+                        <option value="VALUE">VALUE (DO)</option>
+                      </select>
+                    </label>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="toolbox-instance-card">
+              <label className="toolbox-env-toggle">
+                <input
+                  type="checkbox"
+                  checked={proposalForm.includeProductionInstance}
+                  onChange={(e) => {
+                    const on = e.target.checked
+                    onProposalFormChange(
+                      on
+                        ? { includeProductionInstance: true }
+                        : { includeProductionInstance: false, productionTier: '' },
+                    )
+                  }}
+                />
+                <span>Production instance</span>
+              </label>
+              {proposalForm.includeProductionInstance && (
+                <div className="toolbox-env-nested">
+                  <label>
+                    <span className="form-label-caption">
+                      Production tier <span className="req">*</span>
+                      <InfoTip text="Catalog family for Production. PERFORMANCE uses AWS rows; VALUE uses DO rows." />
+                    </span>
+                    <select
+                      value={proposalForm.productionTier}
+                      onChange={(e) => {
+                        const v = e.target.value as ProposalFormState['productionTier']
+                        const patch: Partial<ProposalFormState> = { productionTier: v }
+                        if (proposalForm.includeStagingInstance && v === 'PERFORMANCE') {
+                          patch.stagingInstanceTier = 'PERFORMANCE'
+                        }
+                        onProposalFormChange(patch)
+                      }}
+                    >
+                      <option value="">Select…</option>
+                      <option value="PERFORMANCE">PERFORMANCE (AWS)</option>
+                      <option value="VALUE">VALUE (DO)</option>
+                    </select>
+                  </label>
+                </div>
+              )}
+            </div>
           </div>
           <label>
             <span className="form-label-caption">

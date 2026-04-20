@@ -1695,10 +1695,8 @@ function ChatSession({
               <div className="proposal-slides-banner-copy">
                 <strong>Proposal ready — export required</strong>
                 <p className="muted proposal-slides-banner-text">
-                  Use <strong>Download HTML document</strong> below for the official deliverable (PurpleCloud branding,
-                  tables, Mermaid diagrams). This step is always shown after a successful proposal run. Open the file in
-                  a browser; <strong>Print → Save as PDF</strong> for a PDF. Optional: copy the slide outline or open
-                  Google Slides — diagrams are not included in the outline.
+                  Download the HTML deliverable (branding, tables, Mermaid diagrams), then open it in a browser and
+                  <strong> Print → Save as PDF</strong>. Outline/Slides actions are optional and exclude diagrams.
                 </p>
               </div>
               <div className="proposal-slides-banner-actions">
