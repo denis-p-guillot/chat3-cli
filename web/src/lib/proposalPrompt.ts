@@ -3,6 +3,13 @@
  * @see https://purple-cloud.ai
  */
 
+import {
+  computeLightUserNeed,
+  formatRecommendationForPrompt,
+  recommendFromGrid,
+} from './purpleCloudSizing'
+import { PURPLE_CLOUD_PRODUCT_GRID } from './purpleCloudProductGrid'
+
 export type ProposalEdition = 'enterprise' | 'community'
 
 export type ProposalFormState = {
@@ -65,6 +72,15 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
       ? 'Not specified (optional field left empty).'
       : `${Number.parseInt(visRaw, 10).toLocaleString()} expected daily visitors to the website (e-commerce / public site traffic).`
 
+  const dailyVisitors = visRaw === '' ? null : Number.parseInt(visRaw, 10)
+  const need = computeLightUserNeed(erp, dailyVisitors)
+  const rec = recommendFromGrid(PURPLE_CLOUD_PRODUCT_GRID, need, {
+    erpUsers: erp,
+    dailyVisitors,
+    alternateCount: 2,
+  })
+  const gridSection = formatRecommendationForPrompt(rec)
+
   const notes = form.extraNotes.trim()
   const notesBlock =
     notes ||
@@ -81,19 +97,20 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     `- **ERP users (internal Odoo users):** ${erp.toLocaleString()}`,
     `- **Website / daily visitors:** ${visitorsLine}`,
     '',
+    gridSection,
     '## Additional context (from user)',
     notesBlock,
     '',
     '## Deliverable',
-    'Produce a **professional proposal document** in **Markdown** suitable to send to a prospect. Size infrastructure discussion (workers, RAM, etc.) in light of the ERP user count and website traffic where applicable. Include:',
+    'Produce a **professional proposal document** in **Markdown** suitable to send to a prospect. **Infrastructure need and yearly public B2C pricing must follow the “PurpleCloud hosting grid — sizing” section above** (same column meanings as the commercial grid: Product Name, Light users, Cloud Specifications, Workers Odoo, yearly public B2C in USD). Include:',
     '',
     '1. **Executive summary** — business value; why dedicated PurpleCloud versus self-managed infrastructure.',
     '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); modules only where mentioned in additional context.',
-    '3. **Architecture (high level)** — dedicated hosting, preferred region or data residency if stated in additional context, connectivity, backup and recovery posture.',
-    '4. **Operations** — monitoring, automated backups to secure object storage, maintenance and upgrade cadence, GitHub/GitLab integration if relevant.',
-    '5. **Security** — high-level posture; do not fabricate certifications or contractual SLAs.',
-    '6. **Assumptions & exclusions** — explicit bullet list.',
-    '7. **Commercial structure** — placeholder pricing table or ranges clearly labeled **TBD / indicative only**; never invent binding fees.',
+    '3. **Architecture (high level)** — align to the **primary** grid recommendation unless you justify an alternate; dedicated hosting, region/data residency from additional context if any.',
+    '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with the **Cloud specifications** text of the chosen row(s).',
+    '5. **Security** — high-level posture from those specifications; do not fabricate certifications or contractual SLAs.',
+    '6. **Assumptions & exclusions** — explicit bullet list (include sizing method: Light user need = ERP users + ceil(daily visitors / 25,000) when visitors are provided).',
+    '7. **Commercial structure** — **use the exact Product Name(s) and yearly public B2C (USD) amounts** from the primary (and optionally alternate) rows above. You may label them as public list prices. Do **not** invent SKUs or yearly amounts outside those rows.',
     '8. **Timeline & milestones** — onboarding, UAT, go-live.',
     '9. **Next steps** — information needed from the customer and suggested follow-up.',
     '',
