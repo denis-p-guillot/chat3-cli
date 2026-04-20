@@ -164,76 +164,84 @@ function formatWorkersDisplayValue(workersOdoo: number): string {
   return String(Math.round(workersOdoo * 100) / 100)
 }
 
-function roundLightUsersDisplay(n: number): string {
-  const v = Math.round(n * 100) / 100
-  return Number.isInteger(v) ? String(v) : String(v)
-}
-
 function formatUsd(n: number): string {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
 /**
- * Indicative **Staging** (~5× smaller than anchor) and **Dev** (~8× smaller) **Odoo workers**
- * and **yearly public B2C (USD)** derived from the primary sizing row (same tier family).
+ * Smallest catalog row (by price among ties) in `grid` whose **Light users** covers `lightUserNeed`.
+ * Uses the same matching rules as {@link recommendFromGrid} (including overflow to the largest row).
+ */
+export function pickSmallestCatalogRowForLightNeed(
+  grid: PurpleCloudProductRow[],
+  lightUserNeed: number,
+  tier: 'PERFORMANCE' | 'VALUE',
+): PurpleCloudProductRow {
+  const need = Math.max(1, Math.ceil(lightUserNeed))
+  return recommendFromGrid(grid, need, {
+    erpUsers: 0,
+    dailyVisitors: null,
+    alternateCount: 0,
+    productionTier: tier,
+    erpHeavyFactor: ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
+  }).primary
+}
+
+/**
+ * **Staging** / **Development** rows: real catalog SKUs from the same tier slice, chosen so each
+ * environment’s **Light users** covers a **modeled proxy** (anchor ÷5 and ÷8). **Odoo workers** and
+ * **USD** come only from those rows—no fractional worker counts.
  */
 export function formatStagingDevDerivedSection(
   primary: PurpleCloudProductRow,
   options: {
     includeStaging: boolean
     includeDev: boolean
-    /** Same multiplier as the primary row’s worker column (e.g. 2 when production is in scope). */
-    primaryWorkerDisplayMultiplier: number
+    /** Tier slice (AWS or DO rows) used for primary sizing—the same slice is used for staging/dev snaps. */
+    tierGrid: PurpleCloudProductRow[]
+    catalogTier: 'PERFORMANCE' | 'VALUE'
   },
 ): string {
-  const { includeStaging, includeDev, primaryWorkerDisplayMultiplier } = options
+  const { includeStaging, includeDev, tierGrid, catalogTier } = options
   if (!includeStaging && !includeDev) return ''
 
-  const anchorWorkers = primary.workersOdoo * primaryWorkerDisplayMultiplier
   const anchorLight = primary.lightUsers
-  const anchorPrice = primary.yearlyPriceUsd
 
   const lines: string[] = [
-    '### Staging & development (indicative vs primary anchor)',
+    '### Staging & development (catalog-backed rows)',
     '',
-    `_The **primary recommendation** above is the anchor. When **Staging** and/or **Development** are in scope, add **separate recurring line items** using the derived **Odoo workers** and **yearly USD** below. Staging is modeled as **≈ ${STAGING_VS_PRIMARY_FACTOR}× smaller** than the anchor; Development as **≈ ${DEV_VS_PRIMARY_FACTOR}× smaller** (workers, light-user proxy, and list-price fraction). These are **proportional estimates** for the proposal—not additional catalog SKUs._`,
+    `_Each line below is a **real row** from the same **${catalogTier}** catalog slice as the primary recommendation. **Proxy Light users** = modeled capacity (**primary Light users ÷ ${STAGING_VS_PRIMARY_FACTOR}** for Staging, **÷ ${DEV_VS_PRIMARY_FACTOR}** for Development). The **catalog match** is the **smallest** offering whose **Light users** column is **≥** that proxy (same selection logic as primary sizing). **Odoo workers** and **yearly USD** are taken **only** from that matched row—do not interpolate fractional workers or prices._`,
     '',
   ]
 
   if (includeStaging) {
-    const w = anchorWorkers / STAGING_VS_PRIMARY_FACTOR
-    const lu = anchorLight / STAGING_VS_PRIMARY_FACTOR
-    const p = anchorPrice / STAGING_VS_PRIMARY_FACTOR
+    const proxyNeed = Math.max(1, Math.ceil(anchorLight / STAGING_VS_PRIMARY_FACTOR))
+    const row = pickSmallestCatalogRowForLightNeed(tierGrid, anchorLight / STAGING_VS_PRIMARY_FACTOR, catalogTier)
     lines.push(
-      `#### Staging (≈ **1/${STAGING_VS_PRIMARY_FACTOR}** of anchor)`,
+      `#### Staging — proxy Light users **≥ ${proxyNeed.toLocaleString()}** (from primary ÷ ${STAGING_VS_PRIMARY_FACTOR})`,
       '',
-      '| Metric | Derived (indicative) |',
-      '| --- | --- |',
-      `| Light users (proxy) | ${roundLightUsersDisplay(lu)} |`,
-      `| **Odoo workers (target)** | **${formatWorkersDisplayValue(w)}** |`,
-      `| Yearly public B2C (USD) | ${formatUsd(p)} |`,
+      '| Catalog Light users | **Odoo workers** | Yearly public B2C (USD) |',
+      '| ---: | ---: | ---: |',
+      `| ${row.lightUsers.toLocaleString()} | **${formatWorkersDisplayValue(row.workersOdoo)}** | ${formatUsd(row.yearlyPriceUsd)} |`,
       '',
     )
   }
 
   if (includeDev) {
-    const w = anchorWorkers / DEV_VS_PRIMARY_FACTOR
-    const lu = anchorLight / DEV_VS_PRIMARY_FACTOR
-    const p = anchorPrice / DEV_VS_PRIMARY_FACTOR
+    const proxyNeed = Math.max(1, Math.ceil(anchorLight / DEV_VS_PRIMARY_FACTOR))
+    const row = pickSmallestCatalogRowForLightNeed(tierGrid, anchorLight / DEV_VS_PRIMARY_FACTOR, catalogTier)
     lines.push(
-      `#### Development (≈ **1/${DEV_VS_PRIMARY_FACTOR}** of anchor)`,
+      `#### Development — proxy Light users **≥ ${proxyNeed.toLocaleString()}** (from primary ÷ ${DEV_VS_PRIMARY_FACTOR})`,
       '',
-      '| Metric | Derived (indicative) |',
-      '| --- | --- |',
-      `| Light users (proxy) | ${roundLightUsersDisplay(lu)} |`,
-      `| **Odoo workers (target)** | **${formatWorkersDisplayValue(w)}** |`,
-      `| Yearly public B2C (USD) | ${formatUsd(p)} |`,
+      '| Catalog Light users | **Odoo workers** | Yearly public B2C (USD) |',
+      '| ---: | ---: | ---: |',
+      `| ${row.lightUsers.toLocaleString()} | **${formatWorkersDisplayValue(row.workersOdoo)}** | ${formatUsd(row.yearlyPriceUsd)} |`,
       '',
     )
   }
 
   lines.push(
-    '- **Proposal use:** show **Production** (or the anchor environment) from the primary table, then stack **Staging** and **Development** using these figures as add-on environments; keep language on **Odoo workers** and **USD**, not SKU codes.',
+    '- **Proposal use:** present **Staging** / **Development** as separate recurring line items using **only** the worker counts and USD from the tables above (same tier family as production). Do not paste internal product codes.',
     '',
   )
 
@@ -282,32 +290,33 @@ export function formatRecommendationForPrompt(
       '',
     )
   }
-  const fmtRow = (label: string, r: PurpleCloudProductRow) => {
+  const tableLines: string[] = [
+    '| Slot | Light users (catalog) | Odoo workers (target) | Yearly public B2C (USD) |',
+    '| --- | ---: | ---: | ---: |',
+  ]
+  const pushTableRow = (slot: string, r: PurpleCloudProductRow) => {
     const workersAdjusted = r.workersOdoo * workerMult
     const workersCell =
       workerMult !== 1
-        ? `${formatWorkersDisplayValue(workersAdjusted)} (catalog ${formatWorkersDisplayValue(r.workersOdoo)} × ${workerMult} for production)`
-        : formatWorkersDisplayValue(r.workersOdoo)
-    return [
-      `### ${label}`,
-      '_Internal row — do not disclose catalog SKU / product code to the customer._',
-      '',
-      '| Metric | Value |',
-      '| --- | --- |',
-      `| Light users (catalog) | ${r.lightUsers} |`,
-      `| **Odoo workers (target)** | **${workersCell}** |`,
-      `| Yearly public B2C (USD) | ${r.yearlyPriceUsd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} |`,
-      '',
-    ].join('\n')
+        ? `**${formatWorkersDisplayValue(workersAdjusted)}** (${formatWorkersDisplayValue(r.workersOdoo)} × ${workerMult})`
+        : `**${formatWorkersDisplayValue(workersAdjusted)}**`
+    tableLines.push(
+      `| **${slot}** | ${r.lightUsers.toLocaleString()} | ${workersCell} | ${formatUsd(r.yearlyPriceUsd)} |`,
+    )
   }
-
-  lines.push(fmtRow('Primary recommendation', rec.primary))
+  pushTableRow('Primary recommendation', rec.primary)
   for (let i = 0; i < rec.alternates.length; i++) {
-    lines.push(fmtRow(`Alternate ${i + 1}`, rec.alternates[i]))
+    pushTableRow(`Alternate ${i + 1}`, rec.alternates[i])
   }
   lines.push(
+    '_Internal catalog rows—do not disclose SKU / product codes to the customer._',
+    '',
+    ...tableLines,
+    '',
     '**Rules for the proposal:**',
     '',
+    '- **Odoo workers** and **yearly USD** in customer-facing text must match **exactly** the numeric values in the table above (primary and alternates)—these are the only catalog-backed targets for this tier slice; **do not** round to other worker counts or invent capacities.',
+    '- Present **all dollar amounts** for hosting tiers in the **Commercial** section (and anywhere recurring PurpleCloud fees appear) using **GitHub-Flavored Markdown tables** with a header row, aligned numeric columns, and **one row per line item**—**no** bare inline prices for those amounts.',
     '- Base **yearly public B2C (USD)** on the amounts above only; **do not invent** prices. **Do not** include internal catalog product codes in customer-facing text—describe technical sizing with **Odoo workers** from the table only.',
     ...(workerMult !== 1
       ? [

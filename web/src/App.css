@@ -634,6 +634,46 @@
   padding: 0;
 }
 
+.md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.65rem 0 0.85rem;
+  font-size: 0.88rem;
+  line-height: 1.35;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.2);
+}
+
+.md thead {
+  background: linear-gradient(180deg, rgba(44, 36, 72, 0.95) 0%, rgba(28, 21, 48, 0.98) 100%);
+}
+
+.md th,
+.md td {
+  border: 1px solid var(--border);
+  padding: 0.45rem 0.65rem;
+  vertical-align: top;
+}
+
+.md th {
+  font-weight: 600;
+  text-align: left;
+  color: var(--text);
+  letter-spacing: 0.02em;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.md tbody tr:nth-child(even) {
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.md tbody tr:hover {
+  background: rgba(167, 139, 250, 0.06);
+}
+
 .mermaid-block {
   margin: 0.85rem 0;
   padding: 1rem 1.1rem 0.85rem;
