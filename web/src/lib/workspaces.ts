@@ -41,3 +41,12 @@ export async function activateWorkspace(workspaceId: number): Promise<void> {
   })
   if (!res.ok) throw new Error(await parseErr(res))
 }
+
+export async function deleteWorkspace(workspaceId: number): Promise<{ active_id: number | null }> {
+  const res = await fetch(`/api/workspaces/${workspaceId}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(await parseErr(res))
+  return res.json() as Promise<{ active_id: number | null }>
+}

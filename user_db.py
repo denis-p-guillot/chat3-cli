@@ -280,6 +280,41 @@ def set_active_workspace(user_id: int, workspace_id: int) -> bool:
         conn.close()
 
 
+def delete_workspace(user_id: int, workspace_id: int) -> tuple[bool, int | None]:
+    """Delete a workspace and return (deleted, resulting_active_workspace_id)."""
+    conn = _connect()
+    try:
+        exists = conn.execute(
+            "SELECT id FROM workspaces WHERE id = ? AND user_id = ?",
+            (workspace_id, user_id),
+        ).fetchone()
+        if not exists:
+            return False, None
+
+        conn.execute("DELETE FROM workspaces WHERE id = ? AND user_id = ?", (workspace_id, user_id))
+
+        row = conn.execute("SELECT active_workspace_id FROM users WHERE id = ?", (user_id,)).fetchone()
+        active = int(row["active_workspace_id"]) if row and row["active_workspace_id"] is not None else None
+
+        ids = [int(r["id"]) for r in conn.execute("SELECT id FROM workspaces WHERE user_id = ? ORDER BY id", (user_id,))]
+        if not ids:
+            cur = conn.execute(
+                "INSERT INTO workspaces (user_id, name) VALUES (?, ?)",
+                (user_id, "Default"),
+            )
+            new_active = int(cur.lastrowid)
+        elif active == workspace_id or active is None:
+            new_active = ids[0]
+        else:
+            new_active = active
+
+        conn.execute("UPDATE users SET active_workspace_id = ? WHERE id = ?", (new_active, user_id))
+        conn.commit()
+        return True, new_active
+    finally:
+        conn.close()
+
+
 def ensure_user_workspaces_ready(user_id: int) -> int:
     """Ensure user has at least one workspace and a valid active_workspace_id. Returns active workspace id."""
     conn = _connect()

@@ -28,6 +28,7 @@ import { PasswordStrengthMeter } from './PasswordStrengthMeter'
 import {
   activateWorkspace,
   createWorkspace,
+  deleteWorkspace,
   fetchWorkspacesList,
   type WorkspaceSummary,
 } from './lib/workspaces'
@@ -1139,6 +1140,31 @@ function ChatSession({
     }
   }
 
+  const removeWorkspace = async () => {
+    if (workspaceBusy) return
+    const activeId = me.active_workspace_id
+    const activeName =
+      workspaceList.find((w) => w.id === activeId)?.name ?? me.active_workspace_name ?? `Workspace ${activeId}`
+    const confirmed = window.confirm(
+      `Delete workspace "${activeName}"?\n\nThis will permanently delete all files stored in this workspace.`,
+    )
+    if (!confirmed) return
+
+    setWorkspaceBusy(true)
+    try {
+      await deleteWorkspace(activeId)
+      await onMeRefresh()
+      const d = await fetchWorkspacesList()
+      setWorkspaceList(d.workspaces)
+      setPendingWorkspacePaths([])
+      pushNotice(`Workspace "${activeName}" deleted.`, 'success')
+    } catch (e) {
+      pushNotice(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
+
   const submitSsh = async () => {
     setSshErr(null)
     setSshBusy(true)
@@ -1486,6 +1512,7 @@ function ChatSession({
             historyHydrated={historyHydrated}
             onSwitchWorkspace={(id) => void switchWorkspace(id)}
             onAddWorkspace={() => void addWorkspace()}
+            onDeleteWorkspace={() => void removeWorkspace()}
           />
         )}
 

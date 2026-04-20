@@ -1324,7 +1324,23 @@
 
 .workspace-new-btn {
   width: 100%;
+}
+
+.workspace-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
   margin-top: 0.5rem;
+}
+
+.workspace-delete-btn {
+  width: 100%;
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+.workspace-delete-btn:hover:not(:disabled) {
+  border-color: rgba(251, 113, 133, 0.65);
+  color: #fecdd3;
 }
 
 .workspace-files-head {

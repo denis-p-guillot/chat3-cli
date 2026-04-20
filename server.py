@@ -10,6 +10,7 @@ import queue
 import re
 import secrets
 import shlex
+import shutil
 import threading
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
@@ -60,6 +61,7 @@ from chat3 import (
     ensure_dirs,
     ensure_named_workspace_layout,
     iter_agent_turn,
+    named_workspace_root,
     workspace_session,
 )
 from local_file_analysis import analyze_workspace_file
@@ -70,6 +72,7 @@ from user_db import (
     SshConnectionRow,
     WorkspaceRow,
     create_workspace,
+    delete_workspace,
     delete_ssh_connection,
     ensure_user_workspaces_ready,
     get_user_by_id,
@@ -1687,6 +1690,26 @@ def workspaces_activate(workspace_id: int, user: UserRow = Depends(get_current_u
     if not set_active_workspace(user.id, workspace_id):
         raise HTTPException(status_code=404, detail="Workspace not found.")
     return {"status": "ok", "active_id": workspace_id}
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+def workspaces_delete(workspace_id: int, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    ensure_user_workspaces_ready(user.id)
+    ws_root = named_workspace_root(user.id, workspace_id)
+    deleted, active_id = delete_workspace(user.id, workspace_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+
+    # Best effort filesystem cleanup for that workspace subtree.
+    if ws_root.exists():
+        shutil.rmtree(ws_root, ignore_errors=True)
+        w_parent = ws_root.parent
+        try:
+            if w_parent.exists() and not any(w_parent.iterdir()):
+                w_parent.rmdir()
+        except OSError:
+            pass
+    return {"status": "ok", "active_id": active_id}
 
 
 _web_dist = BASE_DIR / "web" / "dist"
