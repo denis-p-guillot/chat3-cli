@@ -50,6 +50,65 @@ export function ProposalToolboxWidget({
             </select>
             <span className="muted toolbox-field-hint">Language of the generated proposal document (default: English).</span>
           </label>
+          <div className="toolbox-pricing-section">
+            <p className="toolbox-env-section-title">Catalog pricing</p>
+            <p className="muted toolbox-field-hint">
+              List prices follow the internal grid: choose <strong>B2B</strong> (partner / business) or <strong>B2C</strong>{' '}
+              (public), then which commitment columns to include in the proposal tables.
+            </p>
+            <label>
+              <span className="form-label-caption">
+                Price book <span className="req">*</span>
+              </span>
+              <select
+                value={proposalForm.pricingAudience}
+                onChange={(e) =>
+                  onProposalFormChange({
+                    pricingAudience: e.target.value as ProposalFormState['pricingAudience'],
+                  })
+                }
+              >
+                <option value="B2C">B2C (yearly list)</option>
+                <option value="B2B">B2B (yearly list)</option>
+              </select>
+            </label>
+            <div className="toolbox-commitment-row">
+              <label className="toolbox-env-toggle">
+                <input
+                  type="checkbox"
+                  checked={proposalForm.commitmentOneYear}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                    if (!next && !proposalForm.commitmentThreeYear) {
+                      onProposalFormChange({ commitmentOneYear: false, commitmentThreeYear: true })
+                    } else {
+                      onProposalFormChange({ commitmentOneYear: next })
+                    }
+                  }}
+                />
+                <span>1-year commitment (yearly USD)</span>
+              </label>
+              <label className="toolbox-env-toggle">
+                <input
+                  type="checkbox"
+                  checked={proposalForm.commitmentThreeYear}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                    if (!next && !proposalForm.commitmentOneYear) {
+                      onProposalFormChange({ commitmentThreeYear: false, commitmentOneYear: true })
+                    } else {
+                      onProposalFormChange({ commitmentThreeYear: next })
+                    }
+                  }}
+                />
+                <span>3-year commitment (total USD for 3 years, where published)</span>
+              </label>
+            </div>
+            <span className="muted toolbox-field-hint">
+              At least one of <strong>1-year</strong> or <strong>3-year</strong> must stay checked. VALUE (DO) rows may
+              show <strong>N/A</strong> for 3-year totals where the catalog does not offer that term.
+            </span>
+          </div>
           <label>
             <span className="form-label-caption">
               Odoo version <span className="req">*</span>

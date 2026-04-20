@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:grid": "node scripts/build-purplecloud-grid.mjs",
+    "build:grid": "node scripts/build-purplecloud-grid.mjs && node scripts/expand-purplecloud-product-grid.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
   },

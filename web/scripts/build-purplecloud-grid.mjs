@@ -1,7 +1,7 @@
 /**
- * Generates web/src/lib/data/purpleCloudProductGrid.json
- * from PurpleCloud product definitions (same columns as commercial grid).
- * Run: node scripts/build-purplecloud-grid.mjs
+ * Generates web/src/lib/data/purpleCloudProductGrid.json (legacy column yearlyPriceUsd = B2C 1y).
+ * Then run: node scripts/expand-purplecloud-product-grid.mjs
+ * Or: npm run build:grid
  */
 import fs from 'node:fs'
 import path from 'node:path'
