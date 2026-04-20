@@ -59,6 +59,25 @@ export function ProposalToolboxWidget({
             </select>
           </label>
           <label>
+            Production <span className="req">*</span>
+            <select
+              value={proposalForm.productionTier}
+              onChange={(e) =>
+                onProposalFormChange({
+                  productionTier: e.target.value as ProposalFormState['productionTier'],
+                })
+              }
+            >
+              <option value="">Select…</option>
+              <option value="PERFORMANCE">PERFORMANCE</option>
+              <option value="VALUE">VALUE</option>
+            </select>
+            <span className="muted toolbox-field-hint">
+              <strong>PERFORMANCE</strong> — production instances are the line whose names begin with{' '}
+              <strong>AWS</strong>. <strong>VALUE</strong> — names begin with <strong>DO</strong>.
+            </span>
+          </label>
+          <label>
             Number of ERP users <span className="req">*</span>
             <input
               type="number"

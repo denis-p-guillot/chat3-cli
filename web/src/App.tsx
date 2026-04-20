@@ -41,6 +41,11 @@ import {
   type SshConnection,
 } from './lib/connectivity'
 import {
+  GOOGLE_SLIDES_NEW_URL,
+  copyTextToClipboard,
+  proposalMarkdownToSlidesOutline,
+} from './lib/proposalGoogleSlides'
+import {
   buildPurpleCloudProposalRequest,
   emptyProposalForm,
   validateProposalForm,
@@ -551,6 +556,8 @@ function ChatSession({
   const [proposalBusy, setProposalBusy] = useState(false)
   const [proposalErr, setProposalErr] = useState<string | null>(null)
   const [proposalForm, setProposalForm] = useState(emptyProposalForm)
+  /** After a successful Run Proposal, offer Google Slides export for the assistant Markdown. */
+  const [proposalSlidesBanner, setProposalSlidesBanner] = useState<{ markdown: string } | null>(null)
   const [notices, setNotices] = useState<Notice[]>([])
   const [pinnedPathsHydrated, setPinnedPathsHydrated] = useState(false)
 
@@ -729,7 +736,12 @@ function ChatSession({
     return () => cancelAnimationFrame(id)
   }, [messages, busy, tick])
 
-  const runStream = async (payload: ChatMessagePayload[]): Promise<string> => {
+  const runStream = async (
+    payload: ChatMessagePayload[],
+    streamOpts?: { proposalTrace?: boolean },
+  ): Promise<string> => {
+    const proposalTrace = streamOpts?.proposalTrace ?? false
+    let proposalAssistantChunks = 0
     const ac = new AbortController()
     abortRef.current = ac
     abortReasonRef.current = null
@@ -738,13 +750,37 @@ function ChatSession({
     streamRef.current = { tools: [] }
     let assistantOutput = ''
     try {
+      if (proposalTrace) {
+        console.log(
+          '%c[PurpleCloud Proposal]',
+          'color:#c4b5fd;font-weight:bold',
+          'Step 4 — POST /api/chat/stream (SSE); waiting for events…',
+        )
+      }
       await streamChat(
         payload,
         (ev) => {
           const s = streamRef.current
           if (ev.type === 'tool_call') {
+            if (proposalTrace) {
+              console.log(
+                '%c[PurpleCloud Proposal]',
+                'color:#c4b5fd;font-weight:bold',
+                'Tool call:',
+                ev.name,
+                ev.arguments,
+              )
+            }
             s.tools.push({ name: ev.name, args: ev.arguments, output: undefined })
           } else if (ev.type === 'tool_result') {
+            if (proposalTrace) {
+              console.log(
+                '%c[PurpleCloud Proposal]',
+                'color:#c4b5fd;font-weight:bold',
+                `Tool result (${ev.name}):`,
+                ev.output.length > 600 ? `${ev.output.slice(0, 600)}…` : ev.output,
+              )
+            }
             for (let i = s.tools.length - 1; i >= 0; i--) {
               if (s.tools[i].name === ev.name && s.tools[i].output === undefined) {
                 s.tools[i] = { ...s.tools[i], output: ev.output }
@@ -752,8 +788,19 @@ function ChatSession({
               }
             }
           } else if (ev.type === 'assistant') {
+            if (proposalTrace && ev.content && proposalAssistantChunks === 0) {
+              proposalAssistantChunks = 1
+              console.log(
+                '%c[PurpleCloud Proposal]',
+                'color:#c4b5fd;font-weight:bold',
+                'Streaming assistant Markdown (first tokens received)…',
+              )
+            }
             s.assistant = ev.content
           } else if (ev.type === 'error') {
+            if (proposalTrace) {
+              console.log('%c[PurpleCloud Proposal]', 'color:#f87171;font-weight:bold', 'Stream error:', ev.message)
+            }
             s.error = ev.message
           }
           lastStreamEventAtRef.current = Date.now()
@@ -765,6 +812,18 @@ function ChatSession({
       const fin = streamRef.current
       if (fin.assistant) {
         assistantOutput = fin.assistant
+      }
+      if (proposalTrace) {
+        console.log(
+          '%c[PurpleCloud Proposal]',
+          'color:#c4b5fd;font-weight:bold',
+          'Step 5 — Stream finished.',
+          {
+            toolCalls: fin.tools.length,
+            assistantChars: fin.assistant?.length ?? 0,
+            error: fin.error ?? null,
+          },
+        )
       }
       streamRef.current = { tools: [] }
       setTick((x) => x + 1)
@@ -845,7 +904,12 @@ function ChatSession({
     return assistantOutput
   }
 
-  const send = async (opts?: { text?: string; linkedPaths?: string[] }): Promise<string> => {
+  const send = async (opts?: {
+    text?: string
+    linkedPaths?: string[]
+    /** Log proposal pipeline steps to the browser console (DevTools). */
+    proposalTrace?: boolean
+  }): Promise<string> => {
     if (!historyHydrated) return ''
     const text = (opts?.text ?? input).trim()
     const files = pendingFiles
@@ -929,7 +993,7 @@ function ChatSession({
       void refreshWorkspaceFiles()
     }
 
-    return await runStream(payload)
+    return await runStream(payload, { proposalTrace: opts?.proposalTrace })
   }
 
   const stop = () => {
@@ -1235,6 +1299,7 @@ function ChatSession({
 
   const runProposal = async () => {
     setProposalErr(null)
+    setProposalSlidesBanner(null)
     if (!historyHydrated) {
       setProposalErr('Chat is not ready yet.')
       return
@@ -1247,11 +1312,22 @@ function ChatSession({
     }
     setProposalBusy(true)
     try {
+      console.log('%c[PurpleCloud Proposal]', 'color:#c4b5fd;font-weight:bold', 'Step 1 — Validation passed.')
+      console.log('%c[PurpleCloud Proposal]', 'color:#c4b5fd;font-weight:bold', 'Step 2 — Computing grid / sizing…')
       const text = buildPurpleCloudProposalRequest(proposalForm)
-      await send({ text })
+      console.log('%c[PurpleCloud Proposal]', 'color:#c4b5fd;font-weight:bold', 'Step 3 — Prompt built.', {
+        chars: text.length,
+        productionTier: proposalForm.productionTier,
+      })
+      const reply = await send({ text, proposalTrace: true })
       setProposalForm(emptyProposalForm())
       pushNotice('PurpleCloud proposal request sent.', 'success')
+      const clean = reply.trim()
+      if (clean.length > 80 && !/^\*\*Error:\*\*/m.test(clean)) {
+        setProposalSlidesBanner({ markdown: clean })
+      }
     } catch (err) {
+      console.log('%c[PurpleCloud Proposal]', 'color:#f87171;font-weight:bold', 'Failed:', err)
       setProposalErr(err instanceof Error ? err.message : String(err))
     } finally {
       setProposalBusy(false)
@@ -1279,76 +1355,14 @@ function ChatSession({
     <div className="app">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-left">
-            <span className="brand-mark" aria-hidden />
-            <div className="brand-lockup">
-              <span className="brand-product">PurpleCloud</span>
-              <h1 className="brand-title">Brain AI</h1>
-              <p className="tagline">Version 0.6</p>
-            </div>
-          </div>
-          <div className="brand-toolbar">
-            <div className="brand-toolbar-widgets" role="toolbar" aria-label="Show or hide sidebar panels">
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.account ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('account')}
-                title="Account & workspace"
-                aria-label="Toggle Account & workspace panel"
-                aria-pressed={sidebarWidgets.account}
-              >
-                <IconSidebarAccount />
-              </button>
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.diagnose ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('diagnose')}
-                title="Diagnose Error"
-                aria-label="Toggle Diagnose Error panel"
-                aria-pressed={sidebarWidgets.diagnose}
-              >
-                <IconSidebarDiagnose />
-              </button>
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.proposal ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('proposal')}
-                title="Proposal"
-                aria-label="Toggle Proposal panel"
-                aria-pressed={sidebarWidgets.proposal}
-              >
-                <IconSidebarProposal />
-              </button>
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.connectivity ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('connectivity')}
-                title="Connectivity (SSH)"
-                aria-label="Toggle Connectivity panel"
-                aria-pressed={sidebarWidgets.connectivity}
-              >
-                <IconSidebarConnectivity />
-              </button>
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.environment ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('environment')}
-                title="Environment"
-                aria-label="Toggle Environment panel"
-                aria-pressed={sidebarWidgets.environment}
-              >
-                <IconSidebarEnvironment />
-              </button>
-              <button
-                type="button"
-                className={`icon-btn ${sidebarWidgets.workspaceFiles ? 'icon-btn-active' : ''}`}
-                onClick={() => toggleSidebarWidget('workspaceFiles')}
-                title="Workspace files"
-                aria-label="Toggle Workspace files panel"
-                aria-pressed={sidebarWidgets.workspaceFiles}
-              >
-                <IconSidebarWorkspaceFiles />
-              </button>
+          <div className="brand-top">
+            <div className="brand-left">
+              <span className="brand-mark" aria-hidden />
+              <div className="brand-lockup">
+                <span className="brand-product">PurpleCloud</span>
+                <h1 className="brand-title">Brain AI</h1>
+                <p className="tagline">Version 0.6</p>
+              </div>
             </div>
             <div className="brand-toolbar-actions" role="toolbar" aria-label="Account actions">
               <button
@@ -1372,6 +1386,68 @@ function ChatSession({
                 <IconLogout />
               </button>
             </div>
+          </div>
+          <div className="brand-toolbar-widgets" role="toolbar" aria-label="Show or hide sidebar panels">
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.account ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('account')}
+              title="Account & workspace"
+              aria-label="Toggle Account & workspace panel"
+              aria-pressed={sidebarWidgets.account}
+            >
+              <IconSidebarAccount />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.diagnose ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('diagnose')}
+              title="Diagnose Error"
+              aria-label="Toggle Diagnose Error panel"
+              aria-pressed={sidebarWidgets.diagnose}
+            >
+              <IconSidebarDiagnose />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.proposal ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('proposal')}
+              title="Proposal"
+              aria-label="Toggle Proposal panel"
+              aria-pressed={sidebarWidgets.proposal}
+            >
+              <IconSidebarProposal />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.connectivity ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('connectivity')}
+              title="Connectivity (SSH)"
+              aria-label="Toggle Connectivity panel"
+              aria-pressed={sidebarWidgets.connectivity}
+            >
+              <IconSidebarConnectivity />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.environment ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('environment')}
+              title="Environment"
+              aria-label="Toggle Environment panel"
+              aria-pressed={sidebarWidgets.environment}
+            >
+              <IconSidebarEnvironment />
+            </button>
+            <button
+              type="button"
+              className={`icon-btn ${sidebarWidgets.workspaceFiles ? 'icon-btn-active' : ''}`}
+              onClick={() => toggleSidebarWidget('workspaceFiles')}
+              title="Workspace files"
+              aria-label="Toggle Workspace files panel"
+              aria-pressed={sidebarWidgets.workspaceFiles}
+            >
+              <IconSidebarWorkspaceFiles />
+            </button>
           </div>
         </div>
 
@@ -1586,6 +1662,51 @@ function ChatSession({
           )}
 
         </div>
+
+        {proposalSlidesBanner && (
+          <div className="proposal-slides-banner" role="region" aria-label="Export proposal to Google Slides">
+            <div className="proposal-slides-banner-inner">
+              <div className="proposal-slides-banner-copy">
+                <strong>Proposal generated</strong>
+                <p className="muted proposal-slides-banner-text">
+                  Open a new Google Slides deck, then paste the copied outline into slide titles and bodies (one block per
+                  section). You can tweak formatting in Slides after paste.
+                </p>
+              </div>
+              <div className="proposal-slides-banner-actions">
+                <button
+                  type="button"
+                  className="btn secondary"
+                  onClick={async () => {
+                    const outline = proposalMarkdownToSlidesOutline(proposalSlidesBanner.markdown)
+                    const ok = await copyTextToClipboard(outline)
+                    pushNotice(
+                      ok ? 'Slide outline copied to clipboard.' : 'Could not copy — select text manually in the chat.',
+                      ok ? 'success' : 'error',
+                    )
+                  }}
+                >
+                  Copy slide-ready outline
+                </button>
+                <a
+                  className="btn primary proposal-slides-open"
+                  href={GOOGLE_SLIDES_NEW_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open new Google Slides
+                </a>
+                <button
+                  type="button"
+                  className="btn secondary proposal-slides-dismiss"
+                  onClick={() => setProposalSlidesBanner(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <footer
           className={`composer ${dragOver ? 'composer-drop' : ''}`}
