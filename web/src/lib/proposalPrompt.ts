@@ -8,10 +8,12 @@ import {
   ERP_HEAVY_LIGHT_EQUIVALENT_FACTOR,
   filterProductGridForProductionTier,
   formatRecommendationForPrompt,
+  formatStagingDevDerivedSection,
   PRODUCTION_INSTANCE_SPEC_MULTIPLIER,
   recommendFromGrid,
 } from './purpleCloudSizing'
 import { PURPLE_CLOUD_PRODUCT_GRID } from './purpleCloudProductGrid'
+import { PURPLECLOUD_WIKI_SERVICES_FOR_PROPOSAL_PROMPT } from './proposalPurpleCloudWikiContext'
 
 export type ProposalEdition = 'enterprise' | 'community'
 
@@ -206,6 +208,11 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     workerDisplayMultiplier: form.includeProductionInstance ? PRODUCTION_INSTANCE_SPEC_MULTIPLIER : 1,
     productionMatchingNeedBase: form.includeProductionInstance ? needBase : undefined,
   })
+  const stagingDevSection = formatStagingDevDerivedSection(rec.primary, {
+    includeStaging: form.includeStagingInstance,
+    includeDev: form.includeDevInstance,
+    primaryWorkerDisplayMultiplier: form.includeProductionInstance ? PRODUCTION_INSTANCE_SPEC_MULTIPLIER : 1,
+  })
 
   const notes = form.extraNotes.trim()
   const notesBlock =
@@ -247,7 +254,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
   return [
     '[PurpleCloud Proposal]',
     '',
-    'You are drafting a commercial proposal for a **dedicated Odoo** hosting deployment using **PurpleCloud** (https://purple-cloud.ai): an Odoo-focused cloud platform with dedicated servers, automated backups, security (including Cloudflare protection), monitoring, Git-based CI/CD, and separate environments (development, staging, production).',
+    'You are drafting a commercial proposal for a **dedicated Odoo** hosting deployment using **PurpleCloud** (https://purple-cloud.ai): an Odoo-focused cloud platform with dedicated servers, automated backups, security (including Cloudflare protection), monitoring, Git-based CI/CD, and separate environments (development, staging, production). Where relevant, surface **integrated console services** (monitoring, PostgreSQL insight, backup/restore, Web SSH) using the **Wiki reference block** below—**with Markdown links**—so due-diligence readers can verify claims.',
     '',
     '## Confirmed inputs (use exactly as stated; do not change edition or version)',
     `- **Language (proposal output):** ${languageLabel} — write the **entire** proposal (all sections, headings, narrative, and bullets) in **${languageLabel}**. Use **Odoo workers** and **public yearly USD** from the sizing section; **do not** paste internal catalog product codes.`,
@@ -262,21 +269,31 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     `- **ERP users (internal Odoo users):** ${erp.toLocaleString()}`,
     `- **File store size:** ${fileStoreGb.toLocaleString()} GB — Odoo filestore / attachments the customer needs; compare to the disk implied by the chosen **Odoo worker** profile and state if more storage should be sold separately.`,
     `- **Website / daily visitors:** ${visitorsLine}`,
+    ...(form.includeStagingInstance || form.includeDevInstance
+      ? [
+          '',
+          `- **Staging & development specs/pricing:** when included, use the **derived** block after the primary grid — **Staging ≈ 5× smaller** than the anchor (workers + yearly USD ÷ 5), **Development ≈ 8× smaller** (÷ 8). Present them as separate recurring line items alongside production.`,
+        ]
+      : []),
     '',
     gridSection,
+    ...(stagingDevSection.trim() ? ['', stagingDevSection] : []),
+    '',
+    PURPLECLOUD_WIKI_SERVICES_FOR_PROPOSAL_PROMPT,
+    '',
     '## Additional context (from user)',
     notesBlock,
     '',
     '## Deliverable',
-    `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}**. **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Capacity and pricing** must follow the “PurpleCloud hosting grid — sizing” section above using **Odoo workers** and **yearly public B2C (USD)** only—**never** quote internal catalog product codes (e.g. host-style SKU strings). Include:`,
+    `Produce a **professional proposal document** in **Markdown** suitable to send to a prospect, written entirely in **${languageLabel}**. **Use \`##\` headings for each major section** (executive summary, scope, architecture, etc.) so the document maps cleanly to Google Slides. **Capacity and pricing** must follow the “PurpleCloud hosting grid — sizing” section above using **Odoo workers** and **yearly public B2C (USD)** only—**never** quote internal catalog product codes (e.g. host-style SKU strings). When **Staging** / **Development** are included, also use the **derived** workers and USD (anchor ÷5 and ÷8) from that section. Include:`,
     '',
     deliverableExecutiveSummary,
-    '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); the confirmed **file store (GB)** target; modules only where mentioned in additional context.',
+    '2. **Scope** — explicitly reflect the stated Odoo version and edition; environments (dev / staging / production); when **Staging** and/or **Development** are in scope, include their **indicative Odoo workers and yearly USD** from the derived section (≈ **1/5** and **1/8** of the primary anchor); the confirmed **file store (GB)** target; modules only where mentioned in additional context.',
     deliverableArchitecture,
-    '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with dedicated Odoo hosting at the proposed **worker** level.',
-    '5. **Security** — high-level posture appropriate to dedicated Odoo hosting; do not fabricate certifications or contractual SLAs.',
-    `6. **Assumptions & exclusions** — explicit bullet list (include which of **Development / Staging / Production** instances are in scope; rule: **PERFORMANCE Production ⇒ PERFORMANCE Staging** when both are included; Dev may be PERFORMANCE or VALUE independently; sizing: weighted capacity base = ceil(ERP users × heavy factor) + visitor term;${form.includeProductionInstance ? ' when **Production** is in scope, catalog matching uses **2×** that base and **Workers (Odoo)** in the tables are **2×** the raw catalog figure;' : ''} internal tier slice follows **PERFORMANCE** vs **VALUE**; ERP users are **heavy** load; include **file store (GB)** vs implied disk).`,
-    '7. **Commercial structure** — use the **yearly public B2C (USD)** amounts from the primary (and optionally alternate) rows in the sizing section as list prices. **Do not** name internal catalog product codes; anchor the offer on **Odoo workers** and price.',
+    '4. **Operations** — monitoring, backups, maintenance cadence, GitHub/GitLab integration if relevant — consistent with dedicated Odoo hosting at the proposed **worker** level; **ground** operational claims in the **PurpleCloud integrated services (Wiki reference)** section above (Monitoring; PostgreSQL running queries; Backup & restore; Web SSH) and **include those Wiki links** in Markdown.',
+    '5. **Security** — high-level posture appropriate to dedicated Odoo hosting; align narrative to the **Security** Wiki in that same reference block (Cloudflare edge, VALUE vs PERFORMANCE infrastructure themes, Odoo application controls at summary level); **include the Security Wiki link**; do not fabricate certifications or contractual SLAs beyond what the Wiki states.',
+    `6. **Assumptions & exclusions** — explicit bullet list (include which of **Development / Staging / Production** instances are in scope; rule: **PERFORMANCE Production ⇒ PERFORMANCE Staging** when both are included; Dev may be PERFORMANCE or VALUE independently; sizing: weighted capacity base = ceil(ERP users × heavy factor) + visitor term;${form.includeProductionInstance ? ' when **Production** is in scope, catalog matching uses **2×** that base and **Workers (Odoo)** in the tables are **2×** the raw catalog figure;' : ''}${form.includeStagingInstance || form.includeDevInstance ? ' **Staging** / **Development** workers and USD are **indicative fractions** (÷5 and ÷8) of the primary anchor, not extra catalog rows;' : ''} internal tier slice follows **PERFORMANCE** vs **VALUE**; ERP users are **heavy** load; include **file store (GB)** vs implied disk).`,
+    '7. **Commercial structure** — use the **yearly public B2C (USD)** from the **primary** (and optionally alternate) anchor rows, **plus**—when Staging / Development are in scope—the **derived yearly USD** from the *Staging & development* block as separate recurring lines (≈ **1/5** and **1/8** of anchor list price). **Do not** name internal catalog product codes; anchor on **Odoo workers** and USD.',
     '8. **Timeline & milestones** — onboarding, UAT, go-live.',
     '9. **Next steps** — information needed from the customer and suggested follow-up.',
     '',

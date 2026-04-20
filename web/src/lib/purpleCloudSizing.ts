@@ -141,6 +141,11 @@ export function recommendFromGrid(
 /** Double production-oriented specs: catalog workers × this in tables; capacity match uses same factor in the builder. */
 export const PRODUCTION_INSTANCE_SPEC_MULTIPLIER = 2
 
+/** Indicative staging capacity vs primary (production) anchor — ~5× smaller. */
+export const STAGING_VS_PRIMARY_FACTOR = 5
+/** Indicative development capacity vs primary anchor — ~8× smaller. */
+export const DEV_VS_PRIMARY_FACTOR = 8
+
 /** @deprecated alias — use {@link PRODUCTION_INSTANCE_SPEC_MULTIPLIER} */
 export const PRODUCTION_WORKER_DISPLAY_MULTIPLIER = PRODUCTION_INSTANCE_SPEC_MULTIPLIER
 
@@ -157,6 +162,82 @@ export type FormatRecommendationForPromptOptions = {
 function formatWorkersDisplayValue(workersOdoo: number): string {
   if (Number.isInteger(workersOdoo)) return String(workersOdoo)
   return String(Math.round(workersOdoo * 100) / 100)
+}
+
+function roundLightUsersDisplay(n: number): string {
+  const v = Math.round(n * 100) / 100
+  return Number.isInteger(v) ? String(v) : String(v)
+}
+
+function formatUsd(n: number): string {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+/**
+ * Indicative **Staging** (~5× smaller than anchor) and **Dev** (~8× smaller) **Odoo workers**
+ * and **yearly public B2C (USD)** derived from the primary sizing row (same tier family).
+ */
+export function formatStagingDevDerivedSection(
+  primary: PurpleCloudProductRow,
+  options: {
+    includeStaging: boolean
+    includeDev: boolean
+    /** Same multiplier as the primary row’s worker column (e.g. 2 when production is in scope). */
+    primaryWorkerDisplayMultiplier: number
+  },
+): string {
+  const { includeStaging, includeDev, primaryWorkerDisplayMultiplier } = options
+  if (!includeStaging && !includeDev) return ''
+
+  const anchorWorkers = primary.workersOdoo * primaryWorkerDisplayMultiplier
+  const anchorLight = primary.lightUsers
+  const anchorPrice = primary.yearlyPriceUsd
+
+  const lines: string[] = [
+    '### Staging & development (indicative vs primary anchor)',
+    '',
+    `_The **primary recommendation** above is the anchor. When **Staging** and/or **Development** are in scope, add **separate recurring line items** using the derived **Odoo workers** and **yearly USD** below. Staging is modeled as **≈ ${STAGING_VS_PRIMARY_FACTOR}× smaller** than the anchor; Development as **≈ ${DEV_VS_PRIMARY_FACTOR}× smaller** (workers, light-user proxy, and list-price fraction). These are **proportional estimates** for the proposal—not additional catalog SKUs._`,
+    '',
+  ]
+
+  if (includeStaging) {
+    const w = anchorWorkers / STAGING_VS_PRIMARY_FACTOR
+    const lu = anchorLight / STAGING_VS_PRIMARY_FACTOR
+    const p = anchorPrice / STAGING_VS_PRIMARY_FACTOR
+    lines.push(
+      `#### Staging (≈ **1/${STAGING_VS_PRIMARY_FACTOR}** of anchor)`,
+      '',
+      '| Metric | Derived (indicative) |',
+      '| --- | --- |',
+      `| Light users (proxy) | ${roundLightUsersDisplay(lu)} |`,
+      `| **Odoo workers (target)** | **${formatWorkersDisplayValue(w)}** |`,
+      `| Yearly public B2C (USD) | ${formatUsd(p)} |`,
+      '',
+    )
+  }
+
+  if (includeDev) {
+    const w = anchorWorkers / DEV_VS_PRIMARY_FACTOR
+    const lu = anchorLight / DEV_VS_PRIMARY_FACTOR
+    const p = anchorPrice / DEV_VS_PRIMARY_FACTOR
+    lines.push(
+      `#### Development (≈ **1/${DEV_VS_PRIMARY_FACTOR}** of anchor)`,
+      '',
+      '| Metric | Derived (indicative) |',
+      '| --- | --- |',
+      `| Light users (proxy) | ${roundLightUsersDisplay(lu)} |`,
+      `| **Odoo workers (target)** | **${formatWorkersDisplayValue(w)}** |`,
+      `| Yearly public B2C (USD) | ${formatUsd(p)} |`,
+      '',
+    )
+  }
+
+  lines.push(
+    '- **Proposal use:** show **Production** (or the anchor environment) from the primary table, then stack **Staging** and **Development** using these figures as add-on environments; keep language on **Odoo workers** and **USD**, not SKU codes.',
+    '',
+  )
+
+  return lines.join('\n')
 }
 
 export function formatRecommendationForPrompt(
