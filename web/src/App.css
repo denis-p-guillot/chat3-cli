@@ -188,6 +188,59 @@
   color: #e9d5ff;
 }
 
+.toolbox-item-proposal {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(167, 139, 250, 0.15);
+}
+
+.toolbox-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin-bottom: 0.5rem;
+}
+
+.toolbox-form label,
+.toolbox-notes-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.toolbox-form input,
+.toolbox-form select {
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.85rem;
+}
+
+.toolbox-form input:focus,
+.toolbox-form select:focus {
+  outline: none;
+  border-color: rgba(167, 139, 250, 0.5);
+}
+
+.toolbox-form .req {
+  color: #fda4af;
+  font-weight: 600;
+}
+
+.toolbox-item .optional {
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.toolbox-notes-label {
+  margin-bottom: 0.4rem;
+}
+
 .toolbox-help {
   margin: 0 0 0.45rem;
   font-size: 0.76rem;

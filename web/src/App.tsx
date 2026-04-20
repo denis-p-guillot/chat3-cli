@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -40,6 +40,11 @@ import {
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
+import {
+  buildPurpleCloudProposalRequest,
+  emptyProposalForm,
+  validateProposalForm,
+} from './lib/proposalPrompt'
 import { renderDiagnoseHtmlReport, runDiagnoseErrorStream } from './lib/tools'
 import { ToolboxWidget } from './components/ToolboxWidget'
 import { ConnectivityWidget, type SshFormState } from './components/ConnectivityWidget'
@@ -92,6 +97,26 @@ type Notice = {
 
 function uid() {
   return crypto.randomUUID()
+}
+
+/** Show paired HTML report next to diagnostics_summary.md even if only MD is stored in pin state. */
+function expandPinnedWorkspacePaths(paths: string[]): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const p of paths) {
+    if (!seen.has(p)) {
+      out.push(p)
+      seen.add(p)
+    }
+    if (/diagnostics_summary\.md$/i.test(p)) {
+      const html = p.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
+      if (!seen.has(html)) {
+        out.push(html)
+        seen.add(html)
+      }
+    }
+  }
+  return out
 }
 
 function IconSettings({ className }: { className?: string }) {
@@ -466,6 +491,8 @@ function ChatSession({
   const [workspaceFilesOpen, setWorkspaceFilesOpen] = useState(false)
   const [workspaceSearch, setWorkspaceSearch] = useState('')
   const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
+  /** Hide auto-expanded issue_analysis.html row until MD is unpinned or workspace changes. */
+  const [suppressedHtmlPaths, setSuppressedHtmlPaths] = useState<string[]>([])
   const [environmentOpen, setEnvironmentOpen] = useState(false)
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
   const [sshBusy, setSshBusy] = useState(false)
@@ -488,6 +515,9 @@ function ChatSession({
   const [diagnoseContext, setDiagnoseContext] = useState('')
   const [diagnoseSshConnections, setDiagnoseSshConnections] = useState<string[]>([])
   const [toolboxDragOver, setToolboxDragOver] = useState(false)
+  const [proposalBusy, setProposalBusy] = useState(false)
+  const [proposalErr, setProposalErr] = useState<string | null>(null)
+  const [proposalForm, setProposalForm] = useState(emptyProposalForm)
   const [notices, setNotices] = useState<Notice[]>([])
   const [pinnedPathsHydrated, setPinnedPathsHydrated] = useState(false)
 
@@ -556,6 +586,10 @@ function ChatSession({
   }, [me.id, me.active_workspace_id])
 
   useEffect(() => {
+    setSuppressedHtmlPaths([])
+  }, [me.id, me.active_workspace_id])
+
+  useEffect(() => {
     setPinnedPathsHydrated(false)
     const key = `pc:pinnedWorkspacePaths:${me.id}`
     try {
@@ -581,6 +615,11 @@ function ChatSession({
       /* ignore local storage write failures */
     }
   }, [me.id, pinnedPathsHydrated, pendingWorkspacePaths])
+
+  const effectivePinnedPaths = useMemo(
+    () => expandPinnedWorkspacePaths(pendingWorkspacePaths).filter((p) => !suppressedHtmlPaths.includes(p)),
+    [pendingWorkspacePaths, suppressedHtmlPaths],
+  )
 
   useEffect(() => {
     setHistoryHydrated(false)
@@ -742,7 +781,9 @@ function ChatSession({
     if (!historyHydrated) return ''
     const text = (opts?.text ?? input).trim()
     const files = pendingFiles
-    const linkedPaths = opts?.linkedPaths ?? pendingWorkspacePaths
+    const linkedPaths =
+      opts?.linkedPaths ??
+      expandPinnedWorkspacePaths(pendingWorkspacePaths).filter((p) => !suppressedHtmlPaths.includes(p))
     if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return ''
 
     if (files.length > MAX_ATTACHMENTS) {
@@ -907,7 +948,16 @@ function ChatSession({
   }
 
   const removePendingWorkspacePath = (path: string) => {
-    setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
+    if (/diagnostics_summary\.md$/i.test(path)) {
+      setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
+      const html = path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
+      setSuppressedHtmlPaths((prev) => prev.filter((p) => p !== html))
+    } else if (/issue_analysis\.html$/i.test(path)) {
+      setSuppressedHtmlPaths((prev) => (prev.includes(path) ? prev : [...prev, path]))
+      setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
+    } else {
+      setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
+    }
   }
 
   const addPendingWorkspacePath = (path: string) => {
@@ -1052,6 +1102,9 @@ function ChatSession({
         },
       })
       addPendingWorkspacePath(out.path)
+      if (/diagnostics_summary\.md$/i.test(out.path)) {
+        addPendingWorkspacePath(out.path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html'))
+      }
       await refreshWorkspaceFiles()
       setToolboxOpen(false)
       setDiagnoseContext('')
@@ -1089,17 +1142,13 @@ function ChatSession({
       } catch (err) {
         pushNotice(`Final HTML report generation failed: ${err instanceof Error ? err.message : String(err)}`, 'error')
       }
-      const entries = await refreshWorkspaceFiles()
-      const hasHtml = entries.some((e) => e.type === 'file' && e.path === htmlPathCandidate)
+      await refreshWorkspaceFiles()
       setPendingWorkspacePaths((prev) => {
         const next = [...prev]
         if (!next.includes(out.path)) next.push(out.path)
-        if (hasHtml && !next.includes(htmlPathCandidate)) next.push(htmlPathCandidate)
+        if (!next.includes(htmlPathCandidate)) next.push(htmlPathCandidate)
         return next
       })
-      if (!hasHtml) {
-        pushNotice('Final HTML report file not found in workspace after generation.', 'error')
-      }
     } catch (err) {
       setDiagnoseErr(err instanceof Error ? err.message : String(err))
     } finally {
@@ -1117,6 +1166,32 @@ function ChatSession({
     setDiagnoseSshConnections((prev) => prev.filter((x) => x !== name))
   }
 
+  const runProposal = async () => {
+    setProposalErr(null)
+    if (!historyHydrated) {
+      setProposalErr('Chat is not ready yet.')
+      return
+    }
+    if (busy || diagnoseBusy) return
+    const valid = validateProposalForm(proposalForm)
+    if (!valid.ok) {
+      setProposalErr(valid.message)
+      return
+    }
+    setProposalBusy(true)
+    try {
+      const text = buildPurpleCloudProposalRequest(proposalForm)
+      await send({ text })
+      setProposalForm(emptyProposalForm())
+      setToolboxOpen(false)
+      pushNotice('PurpleCloud proposal request sent.', 'success')
+    } catch (err) {
+      setProposalErr(err instanceof Error ? err.message : String(err))
+    } finally {
+      setProposalBusy(false)
+    }
+  }
+
   const live = busy ? streamRef.current : null
   const execStatusText = (() => {
     if (!busy) return ''
@@ -1129,7 +1204,9 @@ function ChatSession({
     return 'Thinking…'
   })()
   const canSend =
-    historyHydrated && !busy && (input.trim().length > 0 || pendingFiles.length > 0 || pendingWorkspacePaths.length > 0)
+    historyHydrated &&
+    !busy &&
+    (input.trim().length > 0 || pendingFiles.length > 0 || effectivePinnedPaths.length > 0)
   const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
 
   return (
@@ -1151,6 +1228,7 @@ function ChatSession({
               onClick={() => {
                 setToolboxOpen((v) => !v)
                 setDiagnoseErr(null)
+                setProposalErr(null)
                 setToolboxDragOver(false)
               }}
               title="Toolbox"
@@ -1184,16 +1262,22 @@ function ChatSession({
         <ToolboxWidget
           open={toolboxOpen}
           dragOver={toolboxDragOver}
+          chatBusy={busy}
           diagnoseBusy={diagnoseBusy}
           diagnoseErr={diagnoseErr}
           diagnoseContext={diagnoseContext}
           diagnoseSshConnections={diagnoseSshConnections}
+          proposalBusy={proposalBusy}
+          proposalErr={proposalErr}
+          proposalForm={proposalForm}
           sshDragType={SSH_CONNECTION_DRAG_TYPE}
           onDragOverState={setToolboxDragOver}
           onDropSshConnection={addDiagnoseSshConnection}
           onRemoveDiagnoseSshConnection={removeDiagnoseSshConnection}
           onDiagnoseContextChange={setDiagnoseContext}
           onRunDiagnose={() => void diagnoseError()}
+          onProposalFormChange={(patch) => setProposalForm((prev) => ({ ...prev, ...patch }))}
+          onRunProposal={() => void runProposal()}
         />
 
         <AccountWidget
@@ -1423,9 +1507,9 @@ function ChatSession({
               ))}
             </ul>
           )}
-          {pendingWorkspacePaths.length > 0 && (
+          {effectivePinnedPaths.length > 0 && (
             <ul className="pending-files pending-workspace-links">
-              {pendingWorkspacePaths.map((path) => (
+              {effectivePinnedPaths.map((path) => (
                 <li key={path}>
                   <span className="attach-name">{path.split('/').pop() || path}</span>
                   <a
