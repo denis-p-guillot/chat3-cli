@@ -3,34 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { Components } from 'react-markdown'
 import mermaid from 'mermaid'
-
-let mermaidInitialized = false
-
-function initMermaidOnce() {
-  if (mermaidInitialized) return
-  mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: 'dark',
-    themeVariables: {
-      primaryColor: '#2a2440',
-      primaryBorderColor: '#6d5acf',
-      primaryTextColor: '#f0ecfc',
-      lineColor: '#a78bfa',
-      secondaryColor: '#1c1530',
-      tertiaryColor: '#141022',
-      mainBkg: '#1c1530',
-      nodeBorder: '#7c6bb0',
-      clusterBkg: 'rgba(28, 21, 48, 0.92)',
-      clusterBorder: 'rgba(167, 139, 250, 0.35)',
-      titleColor: '#e8e4f5',
-      edgeLabelBackground: '#1c1530',
-    },
-    flowchart: { htmlLabels: false, curve: 'basis' },
-    fontFamily: 'ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif',
-  })
-  mermaidInitialized = true
-}
+import { ensureBrainMermaidTheme } from '../lib/mermaidBrainTheme'
 
 function MermaidFigure({ chart }: { chart: string }) {
   const rid = useId().replace(/:/g, '')
@@ -38,7 +11,7 @@ function MermaidFigure({ chart }: { chart: string }) {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    initMermaidOnce()
+    ensureBrainMermaidTheme()
     const source = chart.replace(/\n$/, '').trim()
     if (!source) {
       startTransition(() => {

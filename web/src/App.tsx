@@ -39,6 +39,7 @@ import {
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
+import { downloadProposalAsHtml } from './lib/proposalExportHtml'
 import {
   GOOGLE_SLIDES_NEW_URL,
   copyTextToClipboard,
@@ -1673,17 +1674,42 @@ function ChatSession({
         </div>
 
         {proposalSlidesBanner && (
-          <div className="proposal-slides-banner" role="region" aria-label="Export proposal to Google Slides">
+          <div
+            className="proposal-slides-banner"
+            role="region"
+            aria-label="Proposal export: HTML download or Google Slides outline"
+          >
             <div className="proposal-slides-banner-inner">
               <div className="proposal-slides-banner-copy">
                 <strong>Proposal generated</strong>
                 <p className="muted proposal-slides-banner-text">
-                  Open a new Google Slides deck, then paste the copied outline into slide titles and bodies (one block per
-                  section). Mermaid architecture diagrams are omitted from the outline—keep the chat open for the visual,
-                  or recreate shapes in Slides. You can tweak formatting after paste.
+                  <strong>Download HTML</strong> keeps tables, typography, and Mermaid diagrams in one file (open in a
+                  browser; <strong>Print → Save as PDF</strong> for PDF). Upload that HTML or PDF to{' '}
+                  <strong>Google Drive</strong> anytime. For <strong>Google Slides</strong>, paste the outline below
+                  (diagrams are omitted there). <strong>Google Docs</strong> does not reliably import this layout—use
+                  HTML/PDF on Drive, or a future Docs API + OAuth integration for native Docs.
                 </p>
               </div>
               <div className="proposal-slides-banner-actions">
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => {
+                    void (async () => {
+                      try {
+                        await downloadProposalAsHtml(proposalSlidesBanner.markdown)
+                        pushNotice('Proposal downloaded as HTML (tables and diagrams embedded).', 'success')
+                      } catch (e) {
+                        pushNotice(
+                          e instanceof Error ? e.message : 'Could not build the HTML export.',
+                          'error',
+                        )
+                      }
+                    })()
+                  }}
+                >
+                  Download HTML document
+                </button>
                 <button
                   type="button"
                   className="btn secondary"
