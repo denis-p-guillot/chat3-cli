@@ -219,6 +219,17 @@ function IconClear({ className }: { className?: string }) {
   )
 }
 
+function IconExport({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 17H6.8A1.8 1.8 0 015 15.2V5.8A1.8 1.8 0 016.8 4h7.4L19 8.8V15.2a1.8 1.8 0 01-1.8 1.8H16" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.5 4v4.3a.7.7 0 00.7.7h3.8" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 20v-7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.2 15.8L12 13l2.8 2.8" />
+    </svg>
+  )
+}
+
 function IconSidebarAccount({ className }: { className?: string }) {
   return (
     <svg className={className} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
@@ -1480,6 +1491,12 @@ function ChatSession({
   const activeWorkspaceSelectValue = me.active_workspace_id == null ? '' : String(me.active_workspace_id)
   const accountName = me.display_name?.trim() || me.username
   const accountEmail = me.username.includes('@') ? me.username : `@${me.username}`
+  const lastAssistantReplyForExport =
+    [...messages]
+      .reverse()
+      .find((m): m is Extract<ChatMsg, { role: 'assistant' }> => m.role === 'assistant' && !m.content.trim().startsWith('**Error:**'))
+      ?.content ?? ''
+  const canExportLastReply = historyHydrated && !busy && lastAssistantReplyForExport.trim().length > 0
 
   return (
     <div className="app">
@@ -1852,7 +1869,7 @@ function ChatSession({
                   onClick={() => {
                     void (async () => {
                       try {
-                        await downloadProposalAsHtml(proposalSlidesBanner.markdown)
+                        await downloadProposalAsHtml(proposalSlidesBanner.markdown, me.active_workspace_name)
                         pushNotice('Proposal downloaded as HTML (tables and diagrams embedded).', 'success')
                       } catch (e) {
                         pushNotice(
@@ -2003,6 +2020,26 @@ function ChatSession({
                 >
                   <IconRetry className="composer-btn-icon" />
                   <span>Retry</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary export-btn"
+                  onClick={() => {
+                    void (async () => {
+                      if (!lastAssistantReplyForExport.trim()) return
+                      try {
+                        await downloadProposalAsHtml(lastAssistantReplyForExport, me.active_workspace_name)
+                        pushNotice('Last reply exported as HTML report.', 'success')
+                      } catch (e) {
+                        pushNotice(e instanceof Error ? e.message : 'Could not export HTML report.', 'error')
+                      }
+                    })()
+                  }}
+                  disabled={!canExportLastReply}
+                  title="Export the latest assistant reply as a templated HTML report"
+                >
+                  <IconExport className="composer-btn-icon" />
+                  <span>EXPORT</span>
                 </button>
                 <button
                   type="button"

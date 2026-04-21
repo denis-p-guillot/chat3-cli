@@ -340,20 +340,31 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
   return wrapExportDocument(root.innerHTML)
 }
 
-function proposalDownloadFilename(): string {
+function sanitizeWorkspaceForFilename(name: string): string {
+  return name
+    .trim()
+    .replace(/[\s/\\]+/g, '-')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+function proposalDownloadFilename(workspaceName?: string): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
-  return `purplecloud-proposal-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.html`
+  const base = `purplecloud-proposal-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.html`
+  const prefix = workspaceName ? sanitizeWorkspaceForFilename(workspaceName) : ''
+  return prefix ? `${prefix}-${base}` : base
 }
 
 /** Triggers a browser download of a self-contained HTML proposal. */
-export async function downloadProposalAsHtml(markdown: string): Promise<void> {
+export async function downloadProposalAsHtml(markdown: string, workspaceName?: string): Promise<void> {
   const html = await buildProposalExportHtml(markdown)
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = proposalDownloadFilename()
+  a.download = proposalDownloadFilename(workspaceName)
   a.rel = 'noopener'
   document.body.appendChild(a)
   a.click()
