@@ -2052,6 +2052,16 @@
   text-overflow: ellipsis;
 }
 
+.sidebar-account-display-name {
+  color: var(--text);
+}
+
+.sidebar-account-email {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
 .empty a {
   color: var(--accent);
 }

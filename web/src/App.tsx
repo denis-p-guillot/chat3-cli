@@ -1662,7 +1662,8 @@ function ChatSession({
         <div className="sidebar-bottom">
           <div className="sidebar-account-strip" role="toolbar" aria-label="Account actions">
             <div className="sidebar-account-name" title={`${accountName} [${accountEmail}]`}>
-              {accountName} [{accountEmail}]
+              <span className="sidebar-account-display-name">{accountName}</span>{' '}
+              <span className="sidebar-account-email">[{accountEmail}]</span>
             </div>
             <button
               type="button"
