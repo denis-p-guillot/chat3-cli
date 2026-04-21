@@ -385,15 +385,26 @@ function stripExportSuggestionCues(markdown: string): string {
   return lines.filter((line) => !shouldDropLine(line)).join('\n').trim()
 }
 
+function isLikelyMermaidDiagram(source: string): boolean {
+  const firstLine = source.trim().split('\n')[0]?.trim().toLowerCase() || ''
+  return /^(flowchart|graph|sequencediagram|classdiagram|statediagram|erdiagram|journey|gantt|mindmap|quadrantchart|pie)\b/.test(
+    firstLine,
+  )
+}
+
 /**
  * Turn proposal Markdown into a standalone HTML string (async for Mermaid rendering).
  */
 export async function buildProposalExportHtml(markdown: string): Promise<string> {
   const sanitizedMarkdown = stripExportSuggestionCues(markdown)
   const charts: string[] = []
-  const fenced = /```mermaid\s*\n([\s\S]*?)```/gi
-  const withSlots = sanitizedMarkdown.replace(fenced, (_m, body: string) => {
-    charts.push(body.replace(/\r\n/g, '\n').trim())
+  const fenced = /```([^\n`]*)\n([\s\S]*?)```/gi
+  const withSlots = sanitizedMarkdown.replace(fenced, (_m, langRaw: string, body: string) => {
+    const lang = (langRaw || '').trim().toLowerCase()
+    const normalized = body.replace(/\r\n/g, '\n').trim()
+    const isMermaid = lang === 'mermaid' || (lang === '' && isLikelyMermaidDiagram(normalized))
+    if (!isMermaid) return _m
+    charts.push(normalized)
     const idx = charts.length - 1
     return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
   })
@@ -440,9 +451,13 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
 export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<string> {
   const sanitizedMarkdown = stripExportSuggestionCues(markdown)
   const charts: string[] = []
-  const fenced = /```mermaid\s*\n([\s\S]*?)```/gi
-  const withSlots = sanitizedMarkdown.replace(fenced, (_m, body: string) => {
-    charts.push(body.replace(/\r\n/g, '\n').trim())
+  const fenced = /```([^\n`]*)\n([\s\S]*?)```/gi
+  const withSlots = sanitizedMarkdown.replace(fenced, (_m, langRaw: string, body: string) => {
+    const lang = (langRaw || '').trim().toLowerCase()
+    const normalized = body.replace(/\r\n/g, '\n').trim()
+    const isMermaid = lang === 'mermaid' || (lang === '' && isLikelyMermaidDiagram(normalized))
+    if (!isMermaid) return _m
+    charts.push(normalized)
     const idx = charts.length - 1
     return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
   })
@@ -483,6 +498,33 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       code.textContent = chart
       pre.appendChild(code)
       slot.replaceWith(pre)
+    }
+  }
+  // Fallback: some model outputs land as generic code blocks, not fenced mermaid.
+  // Convert any Mermaid-looking <pre><code> block into an image too.
+  const codeBlocks = root.querySelectorAll('pre > code')
+  for (const codeEl of codeBlocks) {
+    const source = (codeEl.textContent || '').trim()
+    if (!source || !isLikelyMermaidDiagram(source)) continue
+    const pre = codeEl.parentElement
+    if (!pre) continue
+    try {
+      const id = `brain-docs-code-${Math.random().toString(36).slice(2, 10)}`
+      const { svg } = await mermaid.render(id, source)
+      const png = await svgToPngDataUrl(svg)
+      if (!png) throw new Error('PNG conversion failed')
+      const fig = doc.createElement('figure')
+      fig.style.margin = '0.8em 0'
+      const img = doc.createElement('img')
+      img.src = png
+      img.alt = 'Architecture diagram'
+      img.style.maxWidth = '100%'
+      img.style.height = 'auto'
+      img.style.border = '1px solid #dadce0'
+      fig.appendChild(img)
+      pre.replaceWith(fig)
+    } catch {
+      // keep original block if conversion fails
     }
   }
   return wrapDocsFriendlyDocument(root.innerHTML)
