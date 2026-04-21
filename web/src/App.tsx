@@ -468,6 +468,10 @@ function SettingsModal({
         <h2 id="settings-title">Settings</h2>
         <form className="auth-form" onSubmit={(e) => void save(e)}>
           <label>
+            Email
+            <input value={me.username} readOnly aria-readonly="true" />
+          </label>
+          <label>
             Display name
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
           </label>
