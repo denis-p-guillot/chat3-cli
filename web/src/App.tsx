@@ -499,6 +499,63 @@ function SettingsModal({
   )
 }
 
+function NewWorkspaceModal({
+  value,
+  busy,
+  error,
+  onChange,
+  onClose,
+  onSubmit,
+}: {
+  value: string
+  busy: boolean
+  error: string | null
+  onChange: (v: string) => void
+  onClose: () => void
+  onSubmit: () => void
+}) {
+  return (
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="workspace-create-title"
+      onClick={onClose}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !busy) onClose()
+      }}
+    >
+      <div className="modal-card workspace-create-modal" onClick={(e) => e.stopPropagation()}>
+        <h2 id="workspace-create-title">Create workspace</h2>
+        <p className="muted workspace-create-help">Name for the new workspace</p>
+        <input
+          className="workspace-create-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="e.g. Sales Demo"
+          autoFocus
+          disabled={busy}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onSubmit()
+            }
+          }}
+        />
+        {error && <p className="warn workspace-create-error">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" className="btn secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button type="button" className="btn primary" onClick={onSubmit} disabled={busy || value.trim().length === 0}>
+            {busy ? 'Creating…' : 'Create workspace'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ChatSession({
   me,
   onMeChange,
@@ -531,6 +588,9 @@ function ChatSession({
   const [historyHydrated, setHistoryHydrated] = useState(false)
   const [workspaceList, setWorkspaceList] = useState<WorkspaceSummary[]>([])
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [workspaceCreateOpen, setWorkspaceCreateOpen] = useState(false)
+  const [workspaceCreateName, setWorkspaceCreateName] = useState('')
+  const [workspaceCreateErr, setWorkspaceCreateErr] = useState<string | null>(null)
   const [workspaceEntries, setWorkspaceEntries] = useState<WorkspaceEntry[]>([])
   const [workspaceFilesBusy, setWorkspaceFilesBusy] = useState(false)
   const [workspaceFilesErr, setWorkspaceFilesErr] = useState<string | null>(null)
@@ -1120,12 +1180,18 @@ function ChatSession({
     }
   }
 
+  const openCreateWorkspaceModal = () => {
+    if (workspaceBusy || busy || !historyHydrated) return
+    setWorkspaceCreateErr(null)
+    setWorkspaceCreateName('')
+    setWorkspaceCreateOpen(true)
+  }
+
   const addWorkspace = async () => {
-    const name = window.prompt('Name for the new workspace')
-    if (name == null) return
-    const trimmed = name.trim()
+    const trimmed = workspaceCreateName.trim()
     if (!trimmed) return
     setWorkspaceBusy(true)
+    setWorkspaceCreateErr(null)
     try {
       const { id } = await createWorkspace(trimmed)
       await activateWorkspace(id)
@@ -1133,8 +1199,12 @@ function ChatSession({
       const d = await fetchWorkspacesList()
       setWorkspaceList(d.workspaces)
       pushNotice(`Workspace "${trimmed}" created and activated.`, 'success')
+      setWorkspaceCreateOpen(false)
+      setWorkspaceCreateName('')
     } catch (e) {
-      pushNotice(e instanceof Error ? e.message : String(e), 'error')
+      const msg = e instanceof Error ? e.message : String(e)
+      setWorkspaceCreateErr(msg)
+      pushNotice(msg, 'error')
     } finally {
       setWorkspaceBusy(false)
     }
@@ -1404,6 +1474,8 @@ function ChatSession({
   const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
   const activeWorkspaceName = me.active_workspace_name?.trim() || `Workspace ${me.active_workspace_id}`
   const activeWorkspaceSelectValue = me.active_workspace_id == null ? '' : String(me.active_workspace_id)
+  const accountName = me.display_name?.trim() || me.username
+  const accountEmail = me.username.includes('@') ? me.username : `@${me.username}`
 
   return (
     <div className="app">
@@ -1418,33 +1490,8 @@ function ChatSession({
                 <p className="tagline">Version 0.6</p>
               </div>
             </div>
-            <div className="brand-toolbar-actions" role="toolbar" aria-label="Account actions">
-              <button
-                type="button"
-                className="icon-btn"
-                onClick={() => setSettingsOpen(true)}
-                title="Settings — API key and profile"
-                aria-label="Settings"
-              >
-                <IconSettings />
-              </button>
-              <button
-                type="button"
-                className="icon-btn icon-btn-logout"
-                onClick={() => {
-                  void onLogout()
-                }}
-                title="Log out"
-                aria-label="Log out"
-              >
-                <IconLogout />
-              </button>
-            </div>
           </div>
           <div className="sidebar-workspace-always-on" aria-label="Workspace switcher">
-            <p className="sidebar-active-workspace" title={activeWorkspaceName}>
-              Active workspace: <strong>{activeWorkspaceName}</strong>
-            </p>
             <select
               className="workspace-select workspace-select-compact workspace-select-always-on"
               value={activeWorkspaceSelectValue}
@@ -1534,12 +1581,10 @@ function ChatSession({
         {sidebarWidgets.account && (
           <AccountWidget
             me={me}
-            workspaceList={workspaceList}
             workspaceBusy={workspaceBusy}
             busy={busy}
             historyHydrated={historyHydrated}
-            onSwitchWorkspace={(id) => void switchWorkspace(id)}
-            onAddWorkspace={() => void addWorkspace()}
+            onAddWorkspace={openCreateWorkspaceModal}
             onDeleteWorkspace={() => void removeWorkspace()}
           />
         )}
@@ -1614,12 +1659,39 @@ function ChatSession({
           />
         )}
 
-        <p className="brand-footer">
-          <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">
-            PurpleCloud
-          </a>{' '}
-          — Odoo Infra &amp; AI
-        </p>
+        <div className="sidebar-bottom">
+          <div className="sidebar-account-strip" role="toolbar" aria-label="Account actions">
+            <div className="sidebar-account-name" title={`${accountName} [${accountEmail}]`}>
+              {accountName} [{accountEmail}]
+            </div>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setSettingsOpen(true)}
+              title="Settings — API key and profile"
+              aria-label="Settings"
+            >
+              <IconSettings />
+            </button>
+            <button
+              type="button"
+              className="icon-btn icon-btn-logout"
+              onClick={() => {
+                void onLogout()
+              }}
+              title="Log out"
+              aria-label="Log out"
+            >
+              <IconLogout />
+            </button>
+          </div>
+          <p className="brand-footer">
+            <a href="https://purple-cloud.ai/" target="_blank" rel="noopener noreferrer">
+              PurpleCloud
+            </a>{' '}
+            — Odoo Infra &amp; AI
+          </p>
+        </div>
       </aside>
 
       {settingsOpen && (
@@ -1630,6 +1702,20 @@ function ChatSession({
             onMeChange({ display_name: s.display_name, has_openai_key: s.has_openai_key })
             setSettingsOpen(false)
           }}
+        />
+      )}
+      {workspaceCreateOpen && (
+        <NewWorkspaceModal
+          value={workspaceCreateName}
+          busy={workspaceBusy}
+          error={workspaceCreateErr}
+          onChange={setWorkspaceCreateName}
+          onClose={() => {
+            if (workspaceBusy) return
+            setWorkspaceCreateOpen(false)
+            setWorkspaceCreateErr(null)
+          }}
+          onSubmit={() => void addWorkspace()}
         />
       )}
 

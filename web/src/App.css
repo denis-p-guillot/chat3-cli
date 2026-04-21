@@ -1987,8 +1987,38 @@
   margin-left: auto;
 }
 
+.workspace-create-modal {
+  max-width: 520px;
+}
+
+.workspace-create-help {
+  margin: 0 0 0.55rem;
+  font-size: 0.9rem;
+}
+
+.workspace-create-input {
+  width: 100%;
+  padding: 0.62rem 0.7rem;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.95rem;
+}
+
+.workspace-create-input:focus {
+  outline: none;
+  border-color: rgba(167, 139, 250, 0.5);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.workspace-create-error {
+  margin-top: 0.5rem;
+}
+
 .brand-footer {
-  margin-top: auto;
+  margin-top: 0;
   padding-top: 1rem;
   font-size: 0.72rem;
   color: var(--muted);
@@ -1998,6 +2028,28 @@
 
 .brand-footer a {
   font-weight: 600;
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+}
+
+.sidebar-account-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0;
+}
+
+.sidebar-account-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .empty a {
