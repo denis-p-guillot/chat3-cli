@@ -347,6 +347,31 @@ async function svgToPngDataUrl(svgMarkup: string): Promise<string | null> {
   }
 }
 
+function normalizeMermaidSource(source: string): string {
+  return source
+    .replace(/\r\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\\n')
+    .replace(/&nbsp;/gi, ' ')
+    .trim()
+}
+
+async function mermaidSourceToPng(source: string, idPrefix: string): Promise<string | null> {
+  const candidates = [source, normalizeMermaidSource(source)]
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]
+    if (!candidate) continue
+    try {
+      const id = `${idPrefix}-${i}-${Math.random().toString(36).slice(2, 10)}`
+      const { svg } = await mermaid.render(id, candidate)
+      const png = await svgToPngDataUrl(svg)
+      if (png) return png
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return null
+}
+
 /**
  * Remove assistant-style follow-up suggestion cues from proposal exports.
  * We keep the proposal body intact and only strip opt-in recommendation lines.
@@ -478,9 +503,7 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       continue
     }
     try {
-      const id = `brain-docs-${idx}-${Math.random().toString(36).slice(2, 10)}`
-      const { svg } = await mermaid.render(id, chart)
-      const png = await svgToPngDataUrl(svg)
+      const png = await mermaidSourceToPng(chart, `brain-docs-slot-${idx}`)
       if (!png) throw new Error('PNG conversion failed')
       const fig = doc.createElement('figure')
       fig.style.margin = '0.8em 0'
@@ -509,9 +532,7 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
     const pre = codeEl.parentElement
     if (!pre) continue
     try {
-      const id = `brain-docs-code-${Math.random().toString(36).slice(2, 10)}`
-      const { svg } = await mermaid.render(id, source)
-      const png = await svgToPngDataUrl(svg)
+      const png = await mermaidSourceToPng(source, 'brain-docs-code')
       if (!png) throw new Error('PNG conversion failed')
       const fig = doc.createElement('figure')
       fig.style.margin = '0.8em 0'
