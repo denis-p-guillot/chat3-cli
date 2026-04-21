@@ -1191,9 +1191,10 @@
 }
 
 .composer-secondary-col {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
+  min-width: 17.25rem;
 }
 
 .composer-actions .btn {
@@ -1202,10 +1203,10 @@
   justify-content: center;
   gap: 0.38rem;
   width: auto;
-  min-width: 4rem;
+  min-width: 5.2rem;
   padding: 0.48rem 0.72rem;
   border-radius: 7px;
-  font-size: 0.84rem;
+  font-size: 0.82rem;
 }
 
 .attach-btn {
@@ -1214,6 +1215,10 @@
 
 .retry-btn {
   flex-shrink: 0;
+}
+
+.clear-btn {
+  grid-column: 1 / -1;
 }
 
 .composer-actions > .btn {
@@ -1233,7 +1238,8 @@
   }
 
   .composer-secondary-col {
-    flex-direction: row;
+    min-width: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.4rem;
   }
 

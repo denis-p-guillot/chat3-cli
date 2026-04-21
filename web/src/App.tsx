@@ -40,7 +40,7 @@ import {
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
-import { downloadProposalAsHtml } from './lib/proposalExportHtml'
+import { downloadProposalAsDocsFriendlyHtml, downloadProposalAsHtml } from './lib/proposalExportHtml'
 import {
   GOOGLE_SLIDES_NEW_URL,
   copyTextToClipboard,
@@ -2036,10 +2036,30 @@ function ChatSession({
                     })()
                   }}
                   disabled={!canExportLastReply}
-                  title="Export the latest assistant reply as a templated HTML report"
+                  title="Export latest assistant reply as styled HTML"
                 >
                   <IconExport className="composer-btn-icon" />
-                  <span>EXPORT</span>
+                  <span>Export HTML</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn secondary export-btn"
+                  onClick={() => {
+                    void (async () => {
+                      if (!lastAssistantReplyForExport.trim()) return
+                      try {
+                        await downloadProposalAsDocsFriendlyHtml(lastAssistantReplyForExport, me.active_workspace_name)
+                        pushNotice('Last reply exported as Docs-friendly HTML.', 'success')
+                      } catch (e) {
+                        pushNotice(e instanceof Error ? e.message : 'Could not export Docs-friendly HTML.', 'error')
+                      }
+                    })()
+                  }}
+                  disabled={!canExportLastReply}
+                  title="Export latest assistant reply as Google Docs import-friendly HTML"
+                >
+                  <IconExport className="composer-btn-icon" />
+                  <span>Export Docs</span>
                 </button>
                 <button
                   type="button"

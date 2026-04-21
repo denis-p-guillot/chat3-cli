@@ -251,6 +251,102 @@ function wrapExportDocument(bodyInner: string): string {
 </html>`
 }
 
+const DOCS_FRIENDLY_CSS = `
+body {
+  margin: 0;
+  padding: 24px;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 11pt;
+  line-height: 1.5;
+  color: #202124;
+  background: #ffffff;
+}
+h1, h2, h3, h4 { margin: 0.9em 0 0.45em; line-height: 1.25; color: #202124; }
+h1 { font-size: 20pt; border-bottom: 1px solid #dadce0; padding-bottom: 0.2em; }
+h2 { font-size: 16pt; }
+h3 { font-size: 13pt; }
+p { margin: 0.45em 0; }
+ul, ol { margin: 0.4em 0 0.75em 1.4em; }
+table { border-collapse: collapse; width: 100%; margin: 0.8em 0; }
+th, td { border: 1px solid #dadce0; padding: 6px 8px; text-align: left; vertical-align: top; }
+th { background: #f1f3f4; }
+blockquote { margin: 0.6em 0; padding: 0.3em 0 0.3em 0.9em; border-left: 3px solid #9aa0a6; color: #3c4043; }
+pre { white-space: pre-wrap; word-break: break-word; background: #f8f9fa; border: 1px solid #dadce0; padding: 10px; }
+code { font-family: "Courier New", Courier, monospace; font-size: 10pt; }
+.docs-header { margin-bottom: 1.1em; border-bottom: 1px solid #dadce0; padding-bottom: 0.55em; }
+.docs-header h1 { border-bottom: 0; margin: 0; padding: 0; font-size: 18pt; }
+.docs-subtitle { margin-top: 4px; color: #5f6368; font-size: 10pt; }
+.docs-note { margin-top: 1.2em; color: #5f6368; font-size: 10pt; border-top: 1px solid #dadce0; padding-top: 0.6em; }
+`.trim()
+
+function wrapDocsFriendlyDocument(bodyInner: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="generator" content="Brain AI — Docs-friendly export" />
+  <title>PurpleCloud proposal (Docs-friendly)</title>
+  <style>${DOCS_FRIENDLY_CSS}</style>
+</head>
+<body>
+  <header class="docs-header">
+    <h1>PurpleCloud Proposal</h1>
+    <p class="docs-subtitle">Docs-friendly export from Brain AI</p>
+  </header>
+  ${bodyInner}
+  <p class="docs-note">Tip: Import this HTML into Google Docs for easier collaborative editing.</p>
+</body>
+</html>`
+}
+
+async function svgToPngDataUrl(svgMarkup: string): Promise<string | null> {
+  try {
+    const parser = new DOMParser()
+    const svgDoc = parser.parseFromString(svgMarkup, 'image/svg+xml')
+    const svgEl = svgDoc.documentElement
+    const vb = (svgEl.getAttribute('viewBox') || '').trim().split(/\s+/).map(Number)
+    const widthAttr = Number(svgEl.getAttribute('width'))
+    const heightAttr = Number(svgEl.getAttribute('height'))
+    const width =
+      Number.isFinite(widthAttr) && widthAttr > 0
+        ? widthAttr
+        : vb.length === 4 && Number.isFinite(vb[2]) && vb[2] > 0
+          ? vb[2]
+          : 1200
+    const height =
+      Number.isFinite(heightAttr) && heightAttr > 0
+        ? heightAttr
+        : vb.length === 4 && Number.isFinite(vb[3]) && vb[3] > 0
+          ? vb[3]
+          : 700
+
+    const svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(svgBlob)
+    try {
+      const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const i = new Image()
+        i.onload = () => resolve(i)
+        i.onerror = () => reject(new Error('Could not load SVG image'))
+        i.src = url
+      })
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.max(1, Math.round(width))
+      canvas.height = Math.max(1, Math.round(height))
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return null
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      return canvas.toDataURL('image/png')
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  } catch {
+    return null
+  }
+}
+
 /**
  * Remove assistant-style follow-up suggestion cues from proposal exports.
  * We keep the proposal body intact and only strip opt-in recommendation lines.
@@ -340,6 +436,58 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
   return wrapExportDocument(root.innerHTML)
 }
 
+/** Build simplified HTML intended for Google Docs import/editing. */
+export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<string> {
+  const sanitizedMarkdown = stripExportSuggestionCues(markdown)
+  const charts: string[] = []
+  const fenced = /```mermaid\s*\n([\s\S]*?)```/gi
+  const withSlots = sanitizedMarkdown.replace(fenced, (_m, body: string) => {
+    charts.push(body.replace(/\r\n/g, '\n').trim())
+    const idx = charts.length - 1
+    return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
+  })
+  ensureBrainMermaidTheme()
+  const bodyHtml = (await marked.parse(withSlots)) as string
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(`<div id="brain-export-root">${bodyHtml}</div>`, 'text/html')
+  const root = doc.getElementById('brain-export-root')
+  if (!root) {
+    throw new Error('Could not parse docs-friendly export HTML.')
+  }
+  const slots = root.querySelectorAll('.brain-mermaid-slot')
+  for (const slot of slots) {
+    const idx = Number(slot.getAttribute('data-idx'))
+    const chart = charts[idx]
+    if (chart == null || chart === '') {
+      slot.outerHTML = '<p><em>(empty diagram)</em></p>'
+      continue
+    }
+    try {
+      const id = `brain-docs-${idx}-${Math.random().toString(36).slice(2, 10)}`
+      const { svg } = await mermaid.render(id, chart)
+      const png = await svgToPngDataUrl(svg)
+      if (!png) throw new Error('PNG conversion failed')
+      const fig = doc.createElement('figure')
+      fig.style.margin = '0.8em 0'
+      const img = doc.createElement('img')
+      img.src = png
+      img.alt = 'Architecture diagram'
+      img.style.maxWidth = '100%'
+      img.style.height = 'auto'
+      img.style.border = '1px solid #dadce0'
+      fig.appendChild(img)
+      slot.replaceWith(fig)
+    } catch {
+      const pre = doc.createElement('pre')
+      const code = doc.createElement('code')
+      code.textContent = chart
+      pre.appendChild(code)
+      slot.replaceWith(pre)
+    }
+  }
+  return wrapDocsFriendlyDocument(root.innerHTML)
+}
+
 function sanitizeWorkspaceForFilename(name: string): string {
   return name
     .trim()
@@ -357,6 +505,14 @@ function proposalDownloadFilename(workspaceName?: string): string {
   return prefix ? `${prefix}-${base}` : base
 }
 
+function docsFriendlyDownloadFilename(workspaceName?: string): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  const base = `purplecloud-proposal-docs-friendly-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.html`
+  const prefix = workspaceName ? sanitizeWorkspaceForFilename(workspaceName) : ''
+  return prefix ? `${prefix}-${base}` : base
+}
+
 /** Triggers a browser download of a self-contained HTML proposal. */
 export async function downloadProposalAsHtml(markdown: string, workspaceName?: string): Promise<void> {
   const html = await buildProposalExportHtml(markdown)
@@ -365,6 +521,21 @@ export async function downloadProposalAsHtml(markdown: string, workspaceName?: s
   const a = document.createElement('a')
   a.href = url
   a.download = proposalDownloadFilename(workspaceName)
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+/** Triggers a browser download of Docs-friendly HTML (Google Docs import oriented). */
+export async function downloadProposalAsDocsFriendlyHtml(markdown: string, workspaceName?: string): Promise<void> {
+  const html = await buildProposalDocsFriendlyHtml(markdown)
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = docsFriendlyDownloadFilename(workspaceName)
   a.rel = 'noopener'
   document.body.appendChild(a)
   a.click()
