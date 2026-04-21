@@ -1441,6 +1441,32 @@ function ChatSession({
               </button>
             </div>
           </div>
+          <div className="sidebar-workspace-always-on" aria-label="Workspace switcher">
+            <p className="sidebar-active-workspace" title={activeWorkspaceName}>
+              Active workspace: <strong>{activeWorkspaceName}</strong>
+            </p>
+            <select
+              className="workspace-select workspace-select-compact workspace-select-always-on"
+              value={activeWorkspaceSelectValue}
+              onChange={(e) => {
+                const id = Number(e.target.value)
+                if (Number.isFinite(id) && id > 0) void switchWorkspace(id)
+              }}
+              disabled={workspaceBusy || busy || !historyHydrated}
+              aria-label="Switch active workspace"
+            >
+              {workspaceList.length === 0 ? (
+                <option value={activeWorkspaceSelectValue}>{activeWorkspaceName}</option>
+              ) : (
+                workspaceList.map((w) => (
+                  <option key={w.id} value={String(w.id)}>
+                    {w.name}
+                  </option>
+                ))
+              )}
+            </select>
+          </div>
+
           <div className="brand-toolbar-widgets" role="toolbar" aria-label="Show or hide sidebar panels">
             <button
               type="button"
@@ -1502,34 +1528,6 @@ function ChatSession({
             >
               <IconSidebarWorkspaceFiles />
             </button>
-          </div>
-          <div className="sidebar-workspace-switcher">
-            <p className="sidebar-active-workspace" title={activeWorkspaceName}>
-              Active workspace: <strong>{activeWorkspaceName}</strong>
-            </p>
-            <label className="workspace-label workspace-label-compact">
-              <span className="form-label-caption">Switch workspace</span>
-              <select
-                className="workspace-select workspace-select-compact"
-                value={activeWorkspaceSelectValue}
-                onChange={(e) => {
-                  const id = Number(e.target.value)
-                  if (Number.isFinite(id) && id > 0) void switchWorkspace(id)
-                }}
-                disabled={workspaceBusy || busy || !historyHydrated}
-                aria-label="Switch active workspace"
-              >
-                {workspaceList.length === 0 ? (
-                  <option value={activeWorkspaceSelectValue}>{activeWorkspaceName}</option>
-                ) : (
-                  workspaceList.map((w) => (
-                    <option key={w.id} value={String(w.id)}>
-                      {w.name}
-                    </option>
-                  ))
-                )}
-              </select>
-            </label>
           </div>
         </div>
 

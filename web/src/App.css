@@ -64,8 +64,14 @@
   min-width: 0;
 }
 
-.sidebar-workspace-switcher {
-  margin-top: 0.25rem;
+.sidebar-workspace-always-on {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid rgba(167, 139, 250, 0.24);
+  border-radius: 10px;
+  background: rgba(15, 10, 28, 0.42);
 }
 
 .sidebar-active-workspace {
@@ -1341,6 +1347,10 @@
 
 .workspace-select-compact {
   font-size: 0.84rem;
+}
+
+.workspace-select-always-on {
+  margin: 0;
 }
 
 .workspace-select:focus {
