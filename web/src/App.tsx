@@ -1402,6 +1402,8 @@ function ChatSession({
     !busy &&
     (input.trim().length > 0 || pendingFiles.length > 0 || effectivePinnedPaths.length > 0)
   const canRetry = historyHydrated && !busy && canRetryFromMessages(messages)
+  const activeWorkspaceName = me.active_workspace_name?.trim() || `Workspace ${me.active_workspace_id}`
+  const activeWorkspaceSelectValue = me.active_workspace_id == null ? '' : String(me.active_workspace_id)
 
   return (
     <div className="app">
@@ -1502,20 +1504,26 @@ function ChatSession({
             </button>
           </div>
           <div className="sidebar-workspace-switcher">
+            <p className="sidebar-active-workspace" title={activeWorkspaceName}>
+              Active workspace: <strong>{activeWorkspaceName}</strong>
+            </p>
             <label className="workspace-label workspace-label-compact">
-              <span className="form-label-caption">Workspace</span>
+              <span className="form-label-caption">Switch workspace</span>
               <select
                 className="workspace-select workspace-select-compact"
-                value={me.active_workspace_id}
-                onChange={(e) => void switchWorkspace(Number(e.target.value))}
+                value={activeWorkspaceSelectValue}
+                onChange={(e) => {
+                  const id = Number(e.target.value)
+                  if (Number.isFinite(id) && id > 0) void switchWorkspace(id)
+                }}
                 disabled={workspaceBusy || busy || !historyHydrated}
                 aria-label="Switch active workspace"
               >
                 {workspaceList.length === 0 ? (
-                  <option value={me.active_workspace_id}>{me.active_workspace_name || 'Default'}</option>
+                  <option value={activeWorkspaceSelectValue}>{activeWorkspaceName}</option>
                 ) : (
                   workspaceList.map((w) => (
-                    <option key={w.id} value={w.id}>
+                    <option key={w.id} value={String(w.id)}>
                       {w.name}
                     </option>
                   ))
