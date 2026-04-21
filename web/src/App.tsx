@@ -1501,6 +1501,28 @@ function ChatSession({
               <IconSidebarWorkspaceFiles />
             </button>
           </div>
+          <div className="sidebar-workspace-switcher">
+            <label className="workspace-label workspace-label-compact">
+              <span className="form-label-caption">Workspace</span>
+              <select
+                className="workspace-select workspace-select-compact"
+                value={me.active_workspace_id}
+                onChange={(e) => void switchWorkspace(Number(e.target.value))}
+                disabled={workspaceBusy || busy || !historyHydrated}
+                aria-label="Switch active workspace"
+              >
+                {workspaceList.length === 0 ? (
+                  <option value={me.active_workspace_id}>{me.active_workspace_name || 'Default'}</option>
+                ) : (
+                  workspaceList.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+          </div>
         </div>
 
         {sidebarWidgets.account && (
