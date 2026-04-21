@@ -340,5 +340,7 @@ export function buildPurpleCloudProposalRequest(form: ProposalFormState): string
     '8. **Next steps** — information needed from the customer and suggested follow-up.',
     '',
     `Tone: confident, concise, and sales-ready — in **${languageLabel}**. If information is missing outside the confirmed inputs, note gaps and reasonable options rather than guessing sensitive numbers.`,
+    '',
+    'Hard constraint: do **not** add assistant-style optional follow-up suggestions anywhere in the proposal (especially at the end), such as "If you want, I can...", "Si vous le souhaitez, je peux...", "Puedo tambien...". End with concrete proposal content only.',
   ].join('\n')
 }

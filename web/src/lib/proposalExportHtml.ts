@@ -252,12 +252,51 @@ function wrapExportDocument(bodyInner: string): string {
 }
 
 /**
+ * Remove assistant-style follow-up suggestion cues from proposal exports.
+ * We keep the proposal body intact and only strip opt-in recommendation lines.
+ */
+function stripExportSuggestionCues(markdown: string): string {
+  const lines = markdown.split(/\r?\n/)
+  const shouldDropLine = (raw: string): boolean => {
+    const line = raw.trim()
+    if (!line) return false
+
+    const normalized = line
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+
+    const cuePatterns: RegExp[] = [
+      /\bsi vous le souhaitez\b/,
+      /\bsi tu le souhaites\b/,
+      /\bsi vous voulez\b/,
+      /\bif you('?d| would)? like\b/,
+      /\bif needed,? i can\b/,
+      /\bi can also\b/,
+      /\bi can turn this into\b/,
+      /\bje peux aussi\b/,
+      /\bje peux (egalement|aussi) transformer\b/,
+      /\bpuedo tambien\b/,
+      /\bpuedo convertir esto\b/,
+      /\bversion plus\b/,
+      /\btrame de slides\b/,
+      /\bslides? (deck|outline)\b/,
+    ]
+
+    return cuePatterns.some((pattern) => pattern.test(normalized))
+  }
+
+  return lines.filter((line) => !shouldDropLine(line)).join('\n').trim()
+}
+
+/**
  * Turn proposal Markdown into a standalone HTML string (async for Mermaid rendering).
  */
 export async function buildProposalExportHtml(markdown: string): Promise<string> {
+  const sanitizedMarkdown = stripExportSuggestionCues(markdown)
   const charts: string[] = []
   const fenced = /```mermaid\s*\n([\s\S]*?)```/gi
-  const withSlots = markdown.replace(fenced, (_m, body: string) => {
+  const withSlots = sanitizedMarkdown.replace(fenced, (_m, body: string) => {
     charts.push(body.replace(/\r\n/g, '\n').trim())
     const idx = charts.length - 1
     return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
