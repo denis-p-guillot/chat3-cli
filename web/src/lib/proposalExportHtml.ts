@@ -280,6 +280,7 @@ code { font-family: "Courier New", Courier, monospace; font-size: 10pt; }
 `.trim()
 
 function wrapDocsFriendlyDocument(bodyInner: string): string {
+  const generatedAt = new Date().toISOString()
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -292,7 +293,7 @@ function wrapDocsFriendlyDocument(bodyInner: string): string {
 <body>
   <header class="docs-header">
     <h1>PurpleCloud Proposal</h1>
-    <p class="docs-subtitle">Docs-friendly export from Brain AI</p>
+    <p class="docs-subtitle">Docs-friendly export from Brain AI · ${generatedAt}</p>
   </header>
   ${bodyInner}
   <p class="docs-note">Tip: Import this HTML into Google Docs for easier collaborative editing.</p>
@@ -370,6 +371,34 @@ async function mermaidSourceToPng(source: string, idPrefix: string): Promise<str
     }
   }
   return null
+}
+
+function textBlockToPngDataUrl(source: string): string | null {
+  try {
+    const lines = source.replace(/\r\n/g, '\n').split('\n')
+    const fontPx = 13
+    const lineHeight = 18
+    const pad = 16
+    const maxChars = Math.max(1, ...lines.map((l) => l.length))
+    const width = Math.min(2200, Math.max(640, Math.round(maxChars * 7.2) + pad * 2))
+    const height = Math.min(2800, Math.max(180, lines.length * lineHeight + pad * 2))
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return null
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, width, height)
+    ctx.fillStyle = '#202124'
+    ctx.font = `${fontPx}px Menlo, Monaco, Consolas, "Courier New", monospace`
+    ctx.textBaseline = 'top'
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], pad, pad + i * lineHeight)
+    }
+    return canvas.toDataURL('image/png')
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -516,11 +545,25 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       fig.appendChild(img)
       slot.replaceWith(fig)
     } catch {
-      const pre = doc.createElement('pre')
-      const code = doc.createElement('code')
-      code.textContent = chart
-      pre.appendChild(code)
-      slot.replaceWith(pre)
+      const fallback = textBlockToPngDataUrl(chart)
+      if (fallback) {
+        const fig = doc.createElement('figure')
+        fig.style.margin = '0.8em 0'
+        const img = doc.createElement('img')
+        img.src = fallback
+        img.alt = 'Diagram (fallback)'
+        img.style.maxWidth = '100%'
+        img.style.height = 'auto'
+        img.style.border = '1px solid #dadce0'
+        fig.appendChild(img)
+        slot.replaceWith(fig)
+      } else {
+        const pre = doc.createElement('pre')
+        const code = doc.createElement('code')
+        code.textContent = chart
+        pre.appendChild(code)
+        slot.replaceWith(pre)
+      }
     }
   }
   // Fallback: some model outputs land as generic code blocks, not fenced mermaid.
@@ -545,7 +588,18 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       fig.appendChild(img)
       pre.replaceWith(fig)
     } catch {
-      // keep original block if conversion fails
+      const fallback = textBlockToPngDataUrl(source)
+      if (!fallback) continue
+      const fig = doc.createElement('figure')
+      fig.style.margin = '0.8em 0'
+      const img = doc.createElement('img')
+      img.src = fallback
+      img.alt = 'Diagram (fallback)'
+      img.style.maxWidth = '100%'
+      img.style.height = 'auto'
+      img.style.border = '1px solid #dadce0'
+      fig.appendChild(img)
+      pre.replaceWith(fig)
     }
   }
   return wrapDocsFriendlyDocument(root.innerHTML)
@@ -571,7 +625,7 @@ function proposalDownloadFilename(workspaceName?: string): string {
 function docsFriendlyDownloadFilename(workspaceName?: string): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
-  const base = `purplecloud-proposal-docs-friendly-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}.html`
+  const base = `purplecloud-proposal-docs-friendly-${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.html`
   const prefix = workspaceName ? sanitizeWorkspaceForFilename(workspaceName) : ''
   return prefix ? `${prefix}-${base}` : base
 }
