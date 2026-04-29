@@ -1,11 +1,13 @@
 /**
- * Build a self-contained HTML document from proposal Markdown (tables, GFM, Mermaid → SVG).
+ * Build a self-contained HTML document from proposal Markdown (tables, GFM,
+ * PlantUML → SVG via API, optional Mermaid → SVG in-browser).
  * Suitable for download, browser viewing, Print → PDF, or upload to Google Drive.
  */
 
 import { marked } from 'marked'
 import mermaid from 'mermaid'
 import { ensureBrainMermaidTheme } from './mermaidBrainTheme'
+import { renderPlantumlPngDataUrl, renderPlantumlSvg } from './plantumlClient'
 
 marked.setOptions({ gfm: true })
 
@@ -446,24 +448,45 @@ function isLikelyMermaidDiagram(source: string): boolean {
   )
 }
 
+type DiagramKind = 'mermaid' | 'plantuml'
+
+type DiagramSpec = { kind: DiagramKind; source: string }
+
+function classifyDiagramFence(langRaw: string, body: string): DiagramSpec | null {
+  const lang = (langRaw || '').trim().toLowerCase()
+  const normalized = body.replace(/\r\n/g, '\n').trim()
+  if (
+    lang === 'plantuml' ||
+    lang === 'puml' ||
+    lang === 'uml' ||
+    (lang === '' && /^@startuml\b/i.test(normalized))
+  ) {
+    return { kind: 'plantuml', source: normalized }
+  }
+  if (lang === 'mermaid' || (lang === '' && isLikelyMermaidDiagram(normalized))) {
+    return { kind: 'mermaid', source: normalized }
+  }
+  return null
+}
+
 /**
- * Turn proposal Markdown into a standalone HTML string (async for Mermaid rendering).
+ * Turn proposal Markdown into a standalone HTML string (async for diagram rendering).
  */
 export async function buildProposalExportHtml(markdown: string): Promise<string> {
   const sanitizedMarkdown = stripExportSuggestionCues(markdown)
-  const charts: string[] = []
+  const diagrams: DiagramSpec[] = []
   const fenced = /```([^\n`]*)\n([\s\S]*?)```/gi
   const withSlots = sanitizedMarkdown.replace(fenced, (_m, langRaw: string, body: string) => {
-    const lang = (langRaw || '').trim().toLowerCase()
-    const normalized = body.replace(/\r\n/g, '\n').trim()
-    const isMermaid = lang === 'mermaid' || (lang === '' && isLikelyMermaidDiagram(normalized))
-    if (!isMermaid) return _m
-    charts.push(normalized)
-    const idx = charts.length - 1
-    return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
+    const spec = classifyDiagramFence(langRaw, body)
+    if (!spec) return _m
+    diagrams.push(spec)
+    const idx = diagrams.length - 1
+    return `\n\n<div class="brain-diagram-slot" data-idx="${idx}"></div>\n\n`
   })
 
-  ensureBrainMermaidTheme()
+  if (diagrams.some((d) => d.kind === 'mermaid')) {
+    ensureBrainMermaidTheme()
+  }
   const bodyHtml = (await marked.parse(withSlots)) as string
 
   const parser = new DOMParser()
@@ -473,17 +496,34 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
     throw new Error('Could not parse export HTML.')
   }
 
-  const slots = root.querySelectorAll('.brain-mermaid-slot')
+  const slots = root.querySelectorAll('.brain-diagram-slot')
   for (const slot of slots) {
     const idx = Number(slot.getAttribute('data-idx'))
-    const chart = charts[idx]
-    if (chart == null || chart === '') {
+    const spec = diagrams[idx]
+    if (!spec || spec.source === '') {
       slot.outerHTML = '<p class="diagram-fallback">(empty diagram)</p>'
+      continue
+    }
+    if (spec.kind === 'plantuml') {
+      try {
+        const svg = await renderPlantumlSvg(spec.source)
+        const fig = doc.createElement('figure')
+        fig.className = 'mermaid-block'
+        fig.innerHTML = svg
+        slot.replaceWith(fig)
+      } catch {
+        const pre = doc.createElement('pre')
+        pre.className = 'diagram-fallback'
+        const code = doc.createElement('code')
+        code.textContent = spec.source
+        pre.appendChild(code)
+        slot.replaceWith(pre)
+      }
       continue
     }
     try {
       const id = `brain-exp-${idx}-${Math.random().toString(36).slice(2, 10)}`
-      const { svg } = await mermaid.render(id, chart)
+      const { svg } = await mermaid.render(id, spec.source)
       const fig = doc.createElement('figure')
       fig.className = 'mermaid-block'
       fig.innerHTML = svg
@@ -492,7 +532,7 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
       const pre = doc.createElement('pre')
       pre.className = 'diagram-fallback'
       const code = doc.createElement('code')
-      code.textContent = chart
+      code.textContent = spec.source
       pre.appendChild(code)
       slot.replaceWith(pre)
     }
@@ -504,18 +544,18 @@ export async function buildProposalExportHtml(markdown: string): Promise<string>
 /** Build simplified HTML intended for Google Docs import/editing. */
 export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<string> {
   const sanitizedMarkdown = stripExportSuggestionCues(markdown)
-  const charts: string[] = []
+  const diagrams: DiagramSpec[] = []
   const fenced = /```([^\n`]*)\n([\s\S]*?)```/gi
   const withSlots = sanitizedMarkdown.replace(fenced, (_m, langRaw: string, body: string) => {
-    const lang = (langRaw || '').trim().toLowerCase()
-    const normalized = body.replace(/\r\n/g, '\n').trim()
-    const isMermaid = lang === 'mermaid' || (lang === '' && isLikelyMermaidDiagram(normalized))
-    if (!isMermaid) return _m
-    charts.push(normalized)
-    const idx = charts.length - 1
-    return `\n\n<div class="brain-mermaid-slot" data-idx="${idx}"></div>\n\n`
+    const spec = classifyDiagramFence(langRaw, body)
+    if (!spec) return _m
+    diagrams.push(spec)
+    const idx = diagrams.length - 1
+    return `\n\n<div class="brain-diagram-slot" data-idx="${idx}"></div>\n\n`
   })
-  ensureBrainMermaidTheme()
+  if (diagrams.some((d) => d.kind === 'mermaid')) {
+    ensureBrainMermaidTheme()
+  }
   const bodyHtml = (await marked.parse(withSlots)) as string
   const parser = new DOMParser()
   const doc = parser.parseFromString(`<div id="brain-export-root">${bodyHtml}</div>`, 'text/html')
@@ -523,16 +563,21 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
   if (!root) {
     throw new Error('Could not parse docs-friendly export HTML.')
   }
-  const slots = root.querySelectorAll('.brain-mermaid-slot')
+  const slots = root.querySelectorAll('.brain-diagram-slot')
   for (const slot of slots) {
     const idx = Number(slot.getAttribute('data-idx'))
-    const chart = charts[idx]
-    if (chart == null || chart === '') {
+    const spec = diagrams[idx]
+    if (!spec || spec.source === '') {
       slot.outerHTML = '<p><em>(empty diagram)</em></p>'
       continue
     }
     try {
-      const png = await mermaidSourceToPng(chart, `brain-docs-slot-${idx}`)
+      let png: string | null = null
+      if (spec.kind === 'plantuml') {
+        png = await renderPlantumlPngDataUrl(spec.source)
+      } else {
+        png = await mermaidSourceToPng(spec.source, `brain-docs-slot-${idx}`)
+      }
       if (!png) throw new Error('PNG conversion failed')
       const fig = doc.createElement('figure')
       fig.style.margin = '0.8em 0'
@@ -545,7 +590,7 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       fig.appendChild(img)
       slot.replaceWith(fig)
     } catch {
-      const fallback = textBlockToPngDataUrl(chart)
+      const fallback = textBlockToPngDataUrl(spec.source)
       if (fallback) {
         const fig = doc.createElement('figure')
         fig.style.margin = '0.8em 0'
@@ -560,22 +605,29 @@ export async function buildProposalDocsFriendlyHtml(markdown: string): Promise<s
       } else {
         const pre = doc.createElement('pre')
         const code = doc.createElement('code')
-        code.textContent = chart
+        code.textContent = spec.source
         pre.appendChild(code)
         slot.replaceWith(pre)
       }
     }
   }
-  // Fallback: some model outputs land as generic code blocks, not fenced mermaid.
-  // Convert any Mermaid-looking <pre><code> block into an image too.
+  // Fallback: model outputs as generic <pre><code> (not fenced).
   const codeBlocks = root.querySelectorAll('pre > code')
   for (const codeEl of codeBlocks) {
     const source = (codeEl.textContent || '').trim()
-    if (!source || !isLikelyMermaidDiagram(source)) continue
+    if (!source) continue
     const pre = codeEl.parentElement
     if (!pre) continue
+    const plantFirst = /^@startuml\b/i.test(source)
+    const mermaidFirst = !plantFirst && isLikelyMermaidDiagram(source)
+    if (!plantFirst && !mermaidFirst) continue
     try {
-      const png = await mermaidSourceToPng(source, 'brain-docs-code')
+      let png: string | null = null
+      if (plantFirst) {
+        png = await renderPlantumlPngDataUrl(source)
+      } else {
+        png = await mermaidSourceToPng(source, 'brain-docs-code')
+      }
       if (!png) throw new Error('PNG conversion failed')
       const fig = doc.createElement('figure')
       fig.style.margin = '0.8em 0'

@@ -5,8 +5,11 @@ type DiagnoseToolboxWidgetProps = {
   diagnoseContext: string
   diagnoseSshConnections: string[]
   sshDragType: string
+  workspaceDragType: string
   onDragOverState: (v: boolean) => void
   onDropSshConnection: (name: string) => void
+  onDropWorkspacePath: (path: string) => void
+  onDropLocalFiles: (files: FileList) => void
   onRemoveDiagnoseSshConnection: (name: string) => void
   onDiagnoseContextChange: (value: string) => void
   onRunDiagnose: () => void
@@ -19,26 +22,37 @@ export function DiagnoseToolboxWidget({
   diagnoseContext,
   diagnoseSshConnections,
   sshDragType,
+  workspaceDragType,
   onDragOverState,
   onDropSshConnection,
+  onDropWorkspacePath,
+  onDropLocalFiles,
   onRemoveDiagnoseSshConnection,
   onDiagnoseContextChange,
   onRunDiagnose,
 }: DiagnoseToolboxWidgetProps) {
+  const allowsDrop = (e: React.DragEvent) => {
+    const types = Array.from(e.dataTransfer.types)
+    return (
+      types.includes(sshDragType) ||
+      types.includes(workspaceDragType) ||
+      types.includes('Files') ||
+      e.dataTransfer.files.length > 0
+    )
+  }
+
   return (
     <div className="sidebar-section sidebar-widget">
       <h2>Diagnose Error</h2>
       <div
         className={`toolbox-item ${dragOver ? 'toolbox-drop' : ''}`}
         onDragEnter={(e) => {
-          const hasSsh = Array.from(e.dataTransfer.types).includes(sshDragType)
-          if (!hasSsh) return
+          if (!allowsDrop(e)) return
           e.preventDefault()
           onDragOverState(true)
         }}
         onDragOver={(e) => {
-          const hasSsh = Array.from(e.dataTransfer.types).includes(sshDragType)
-          if (!hasSsh) return
+          if (!allowsDrop(e)) return
           e.preventDefault()
           e.dataTransfer.dropEffect = 'copy'
         }}
@@ -51,6 +65,9 @@ export function DiagnoseToolboxWidget({
           onDragOverState(false)
           const name = e.dataTransfer.getData(sshDragType)
           if (name) onDropSshConnection(name)
+          const path = e.dataTransfer.getData(workspaceDragType)
+          if (path) onDropWorkspacePath(path)
+          if (e.dataTransfer.files?.length) onDropLocalFiles(e.dataTransfer.files)
         }}
       >
         <p className="muted toolbox-help">
@@ -58,6 +75,9 @@ export function DiagnoseToolboxWidget({
         </p>
         <p className="muted toolbox-help">
           Drag SSH connections from the Connectivity widget here to grant diagnosis SSH scope.
+        </p>
+        <p className="muted toolbox-help">
+          Drag workspace files or local files here to attach them for diagnostics (archives are auto-extracted during analysis).
         </p>
         {diagnoseSshConnections.length > 0 && (
           <ul className="toolbox-ssh-list">

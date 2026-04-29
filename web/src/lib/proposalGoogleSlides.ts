@@ -9,21 +9,21 @@ export function proposalMarkdownToSlidesOutline(markdown: string): string {
   const lines = markdown.split(/\r?\n/)
   const out: string[] = []
   let slide = 0
-  let inMermaidFence = false
+  let inDiagramFence = false
   for (const line of lines) {
     const trimmedFence = line.trim()
-    if (trimmedFence.startsWith('```mermaid')) {
-      inMermaidFence = true
+    if (/^```(mermaid|plantuml|puml|uml)\b/i.test(trimmedFence)) {
+      inDiagramFence = true
       if (slide > 0) {
         out.push(
-          '(Architecture diagram: view the rendered figure in Brain AI chat, or paste the ```mermaid block into a Mermaid-compatible editor.)',
+          '(Architecture diagram: view the rendered figure in Brain AI chat, or paste the fenced diagram into PlantUML / Mermaid.)',
         )
       }
       continue
     }
-    if (inMermaidFence) {
+    if (inDiagramFence) {
       if (trimmedFence.startsWith('```')) {
-        inMermaidFence = false
+        inDiagramFence = false
       }
       continue
     }

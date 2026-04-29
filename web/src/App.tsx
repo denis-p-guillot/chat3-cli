@@ -1034,7 +1034,19 @@ function ChatSession({
     }
 
     const userId = uid()
-    const workspacePaths = [...new Set([...linkedPaths, ...uploaded.map((u) => u.path)])]
+    const uniqueWorkspacePaths = [...new Set([...linkedPaths, ...uploaded.map((u) => u.path)])]
+    // Backend enforces max_length=20 for workspace_files; keep diagnose summary/report links first.
+    const prioritizedWorkspacePaths = [
+      ...uniqueWorkspacePaths.filter((p) => /diagnostics_summary\.md$/i.test(p) || /issue_analysis\.html$/i.test(p)),
+      ...uniqueWorkspacePaths.filter((p) => !/diagnostics_summary\.md$/i.test(p) && !/issue_analysis\.html$/i.test(p)),
+    ]
+    const workspacePaths = prioritizedWorkspacePaths.slice(0, MAX_ATTACHMENTS)
+    if (uniqueWorkspacePaths.length > MAX_ATTACHMENTS) {
+      pushNotice(
+        `Too many linked files (${uniqueWorkspacePaths.length}). Only the first ${MAX_ATTACHMENTS} were sent.`,
+        'error',
+      )
+    }
     const uploadedByPath = new Map(uploaded.map((u) => [u.path, u]))
     const attachmentSummary: { name: string; size: number; path: string }[] = workspacePaths.map((path) => {
       const up = uploadedByPath.get(path)
@@ -1179,7 +1191,14 @@ function ChatSession({
   }
 
   const addPendingWorkspacePath = (path: string) => {
-    setPendingWorkspacePaths((prev) => (prev.includes(path) ? prev : [...prev, path]))
+    setPendingWorkspacePaths((prev) => {
+      if (prev.includes(path)) return prev
+      if (prev.length >= MAX_ATTACHMENTS) {
+        pushNotice(`You can link at most ${MAX_ATTACHMENTS} workspace files.`, 'error')
+        return prev
+      }
+      return [...prev, path]
+    })
   }
 
   const switchWorkspace = async (id: number) => {
@@ -1618,8 +1637,11 @@ function ChatSession({
             diagnoseContext={diagnoseContext}
             diagnoseSshConnections={diagnoseSshConnections}
             sshDragType={SSH_CONNECTION_DRAG_TYPE}
+            workspaceDragType={WORKSPACE_PATH_DRAG_TYPE}
             onDragOverState={setToolboxDragOver}
             onDropSshConnection={addDiagnoseSshConnection}
+            onDropWorkspacePath={addPendingWorkspacePath}
+            onDropLocalFiles={mergeFilesIntoPending}
             onRemoveDiagnoseSshConnection={removeDiagnoseSshConnection}
             onDiagnoseContextChange={setDiagnoseContext}
             onRunDiagnose={() => void diagnoseError()}
@@ -1858,7 +1880,7 @@ function ChatSession({
               <div className="proposal-slides-banner-copy">
                 <strong>Proposal ready — export required</strong>
                 <p className="muted proposal-slides-banner-text">
-                  Download the HTML deliverable (branding, tables, Mermaid diagrams), then open it in a browser and
+                  Download the HTML deliverable (branding, tables, PlantUML diagrams), then open it in a browser and
                   <strong> Print → Save as PDF</strong>. Outline/Slides actions are optional and exclude diagrams.
                 </p>
               </div>

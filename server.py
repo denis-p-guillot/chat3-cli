@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import html
 import json
 import os
+import tarfile
+import urllib.error
+import urllib.request
 import queue
 import re
 import secrets
@@ -48,10 +52,12 @@ _bootstrap_secret_key()
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, Field, model_validator
+
+from plantuml_codec import plantuml_encode
 
 from auth_api import get_current_user, get_openai_key_for_user, router as auth_router
 from chat3 import (
@@ -64,7 +70,7 @@ from chat3 import (
     named_workspace_root,
     workspace_session,
 )
-from local_file_analysis import analyze_workspace_file
+from local_file_analysis import MAX_ANALYSIS_READ_BYTES, analyze_workspace_file
 from ssh_exec import run_ssh_command
 from user_crypto import decrypt_api_key, encrypt_api_key
 from user_db import (
@@ -107,6 +113,47 @@ MAX_FILE_BYTES = 500 * 1024 * 1024
 MAX_ATTACHMENTS = 20
 MAX_TOTAL_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024
 MAX_WORKSPACE_LIST_ENTRIES = 800
+MAX_ARCHIVE_EXTRACT_FILES = 4_000
+MAX_ARCHIVE_EXTRACT_TOTAL_BYTES = 1_500_000_000
+MAX_ARCHIVE_GREP_MATCHES = 200
+
+MAX_PLANTUML_SOURCE_CHARS = 400_000
+
+
+class PlantUmlRenderBody(BaseModel):
+    """Render PlantUML text via a PlantUML server (see PLANTUML_SERVER env)."""
+
+    source: str = Field(..., max_length=MAX_PLANTUML_SOURCE_CHARS)
+    format: str = Field(default="svg", description="svg or png")
+
+    @model_validator(mode="after")
+    def _normalize_format(self) -> PlantUmlRenderBody:
+        fmt = (self.format or "svg").strip().lower()
+        if fmt not in ("svg", "png"):
+            raise ValueError('format must be "svg" or "png"')
+        self.format = fmt
+        return self
+
+
+def _plantuml_server_base() -> str:
+    return (os.environ.get("PLANTUML_SERVER") or "https://www.plantuml.com/plantuml").rstrip("/")
+
+
+def _fetch_plantuml_image(source: str, fmt: str) -> bytes:
+    encoded = plantuml_encode(source)
+    url = f"{_plantuml_server_base()}/{fmt}/{encoded}"
+    req = urllib.request.Request(url, headers={"User-Agent": "PurpleCloud-Brain/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:4000]
+        raise HTTPException(
+            status_code=502,
+            detail=f"PlantUML server returned HTTP {exc.code}: {detail}",
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=502, detail=f"PlantUML request failed: {exc}") from exc
 
 
 def current_user_workspace(
@@ -126,6 +173,116 @@ def sanitize_filename(name: str) -> str:
     if not base or base in (".", ".."):
         return "unnamed"
     return base[:200]
+
+
+def _is_diagnose_archive(path: Path) -> bool:
+    low = path.name.lower()
+    return low.endswith(".tar") or low.endswith(".tar.gz") or low.endswith(".tgz") or low.endswith(".gz") or low.endswith(".gzip")
+
+
+def _archive_cache_root(path: Path) -> Path:
+    key = f"{int(path.stat().st_mtime_ns)}_{path.stat().st_size}"
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "_", path.name)[:120]
+    return path.parent / ".diagnose_extract" / f"{base}_{key}"
+
+
+def _safe_extract_member_path(root: Path, member_name: str) -> Path:
+    safe_name = member_name.replace("\\", "/").lstrip("/")
+    target = (root / safe_name).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"Unsafe archive member path: {member_name}") from exc
+    return target
+
+
+def _extract_tar_archive(path: Path, out_dir: Path) -> list[Path]:
+    extracted: list[Path] = []
+    files = 0
+    total = 0
+    with tarfile.open(path, mode="r:*") as tf:
+        members = tf.getmembers()
+        for m in members:
+            if m.isdir():
+                continue
+            files += 1
+            if files > MAX_ARCHIVE_EXTRACT_FILES:
+                raise ValueError(f"Archive has too many files (>{MAX_ARCHIVE_EXTRACT_FILES}).")
+            size = int(max(m.size, 0))
+            total += size
+            if total > MAX_ARCHIVE_EXTRACT_TOTAL_BYTES:
+                raise ValueError("Archive is too large after extraction.")
+            target = _safe_extract_member_path(out_dir, m.name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            src = tf.extractfile(m)
+            if src is None:
+                continue
+            with src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst, length=1024 * 1024)
+            extracted.append(target)
+    return extracted
+
+
+def _extract_gzip_file(path: Path, out_dir: Path) -> list[Path]:
+    base_name = path.name
+    low = base_name.lower()
+    if low.endswith(".gz"):
+        base_name = base_name[:-3] or "unzipped"
+    elif low.endswith(".gzip"):
+        base_name = base_name[:-5] or "unzipped"
+    target = _safe_extract_member_path(out_dir, sanitize_filename(base_name))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "rb") as src, target.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)
+    return [target]
+
+
+def _extract_archive_for_diagnose(path: Path) -> tuple[Path, list[Path]]:
+    if not _is_diagnose_archive(path):
+        return path.parent, []
+    out_dir = _archive_cache_root(path)
+    marker = out_dir / ".ok"
+    if marker.exists():
+        files = [p for p in out_dir.rglob("*") if p.is_file() and p.name != ".ok"]
+        return out_dir, files
+    out_dir.mkdir(parents=True, exist_ok=True)
+    extracted: list[Path]
+    low = path.name.lower()
+    if low.endswith(".tar") or low.endswith(".tar.gz") or low.endswith(".tgz"):
+        extracted = _extract_tar_archive(path, out_dir)
+    else:
+        extracted = _extract_gzip_file(path, out_dir)
+    marker.write_text("ok", encoding="utf-8")
+    return out_dir, extracted
+
+
+def _grep_extracted_files(files: list[Path], root: Path) -> list[str]:
+    if not files:
+        return []
+    patt = re.compile(r"(error|exception|traceback|fatal|failed|timeout|refused)", re.IGNORECASE)
+    out: list[str] = []
+    for fp in files:
+        if len(out) >= MAX_ARCHIVE_GREP_MATCHES:
+            break
+        try:
+            if fp.stat().st_size > MAX_ANALYSIS_READ_BYTES:
+                continue
+            raw = fp.read_bytes()
+        except OSError:
+            continue
+        if b"\x00" in raw[:4096]:
+            continue
+        txt = raw.decode("utf-8", errors="replace")
+        for idx, line in enumerate(txt.splitlines(), start=1):
+            if patt.search(line):
+                rel = fp.relative_to(root).as_posix()
+                snippet = line.strip()
+                if len(snippet) > 300:
+                    snippet = snippet[:300] + "…"
+                out.append(f"- `{rel}:{idx}` {snippet}")
+                if len(out) >= MAX_ARCHIVE_GREP_MATCHES:
+                    break
+    return out
 
 
 def _resolve_user_workspace_rel(rel: str, user_id: int) -> Path:
@@ -164,10 +321,34 @@ def expand_workspace_file(rel: str, user_id: int) -> str:
             f"**Attachment too large to process:** `{rel}` (max {MAX_FILE_BYTES} bytes).\n"
         )
     body = analyze_workspace_file(path, rel)
+    if not _is_diagnose_archive(path):
+        return (
+            "---\n"
+            "**User attachment (parsed and summarized locally — you do not receive the full file as raw bytes):**\n\n"
+            f"{body}\n"
+        )
+
+    archive_extra = ""
+    try:
+        extract_root, extracted = _extract_archive_for_diagnose(path)
+        grep_lines = _grep_extracted_files(extracted, extract_root)
+        preview = "\n".join(grep_lines[:50]) if grep_lines else "- No obvious error keywords matched."
+        archive_extra = (
+            "\n\n### Archive diagnostics (auto-extracted for Diagnose Error)\n"
+            f"- **Extracted files:** {len(extracted)}\n"
+            f"- **Extraction root:** `{extract_root.relative_to(WORKSPACE_DIR).as_posix()}`\n"
+            "- **Keyword grep hits (`error|exception|traceback|fatal|failed|timeout|refused`):**\n"
+            f"{preview}\n"
+        )
+    except Exception as exc:
+        archive_extra = (
+            "\n\n### Archive diagnostics (auto-extracted for Diagnose Error)\n"
+            f"- Extraction failed: {exc}\n"
+        )
     return (
         "---\n"
         "**User attachment (parsed and summarized locally — you do not receive the full file as raw bytes):**\n\n"
-        f"{body}\n"
+        f"{body}{archive_extra}\n"
     )
 
 
@@ -1544,6 +1725,21 @@ def _run_diagnose_error(
     )
     rel = f"users/{user.id}/w/{ws_id}/diagnostics_summary.md"
     return {"status": "ok", "path": rel, "name": "diagnostics_summary.md", "ssh_connections": attached, "activity": activity}
+
+
+@app.post("/api/tools/plantuml/render")
+def tools_plantuml_render(
+    body: PlantUmlRenderBody,
+    _user: UserRow = Depends(get_current_user),
+) -> Response:
+    """Proxy to a PlantUML server so the browser can embed diagrams without third-party CORS."""
+    source = body.source.strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="source must not be empty.")
+    payload = _fetch_plantuml_image(source, body.format)
+    if body.format == "svg":
+        return Response(content=payload, media_type="image/svg+xml; charset=utf-8")
+    return Response(content=payload, media_type="image/png")
 
 
 @app.post("/api/tools/diagnose-error")

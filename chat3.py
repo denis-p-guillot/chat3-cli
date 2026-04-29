@@ -346,6 +346,19 @@ def resolve_rooted_path(root: str, user_path: str) -> Path:
 
     raw = Path(user_path)
 
+    # Accept workspace-absolute style paths (users/<id>/w/<ws_id>/...) even when
+    # the current tool root is already scoped to that named workspace.
+    if root == "workspace" and not raw.is_absolute():
+        raw_posix = user_path.strip().replace("\\", "/")
+        if raw_posix.startswith("users/"):
+            workspace_absolute = (WORKSPACE_DIR / raw_posix).resolve()
+            try:
+                workspace_absolute.relative_to(root_path)
+                return workspace_absolute
+            except ValueError:
+                # Not inside the active workspace root; fall back to normal handling.
+                pass
+
     if raw.is_absolute():
         candidate = raw.resolve()
     else:
