@@ -71,7 +71,7 @@ export function DiagnoseToolboxWidget({
         }}
       >
         <p className="muted toolbox-help">
-          Generates <code>issue_analysis.html</code> in the active workspace and links it to your next prompt.
+          Runs diagnostics first, then generates <code>issue_analysis.html</code> in the active workspace at the end.
         </p>
         <p className="muted toolbox-help">
           Drag SSH connections from the Connectivity widget here to grant diagnosis SSH scope.

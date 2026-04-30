@@ -111,24 +111,14 @@ function uid() {
   return crypto.randomUUID()
 }
 
-/** Show paired HTML report next to diagnostics_summary.md even if only MD is stored in pin state. */
+function workspaceScopedStorageKey(prefix: string, userId: number, workspaceId: number | undefined): string {
+  const ws = Number.isFinite(workspaceId) && (workspaceId ?? 0) > 0 ? String(workspaceId) : 'none'
+  return `${prefix}:${userId}:${ws}`
+}
+
+/** Normalize pinned workspace links and remove duplicates. */
 function expandPinnedWorkspacePaths(paths: string[]): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const p of paths) {
-    if (!seen.has(p)) {
-      out.push(p)
-      seen.add(p)
-    }
-    if (/diagnostics_summary\.md$/i.test(p)) {
-      const html = p.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
-      if (!seen.has(html)) {
-        out.push(html)
-        seen.add(html)
-      }
-    }
-  }
-  return out
+  return [...new Set(paths)]
 }
 
 function IconSettings({ className }: { className?: string }) {
@@ -612,7 +602,6 @@ function ChatSession({
   const [workspaceFilesTruncated, setWorkspaceFilesTruncated] = useState(false)
   const [workspaceSearch, setWorkspaceSearch] = useState('')
   const [pendingWorkspacePaths, setPendingWorkspacePaths] = useState<string[]>([])
-  /** Hide auto-expanded issue_analysis.html row until MD is unpinned or workspace changes. */
   const [suppressedHtmlPaths, setSuppressedHtmlPaths] = useState<string[]>([])
   const [sshConnections, setSshConnections] = useState<SshConnection[]>([])
   const [sshBusy, setSshBusy] = useState(false)
@@ -679,7 +668,7 @@ function ChatSession({
 
   useEffect(() => {
     void refreshSshConnections()
-  }, [me.id])
+  }, [me.id, me.active_workspace_id])
 
   const refreshWorkspaceFiles = async (): Promise<WorkspaceEntry[]> => {
     setWorkspaceFilesBusy(true)
@@ -713,7 +702,7 @@ function ChatSession({
 
   useEffect(() => {
     setPinnedPathsHydrated(false)
-    const key = `pc:pinnedWorkspacePaths:${me.id}`
+    const key = workspaceScopedStorageKey('pc:pinnedWorkspacePaths', me.id, me.active_workspace_id)
     try {
       const raw = window.localStorage.getItem(key)
       if (raw) {
@@ -726,21 +715,21 @@ function ChatSession({
       /* keep current in-memory pins if storage is unavailable */
     }
     setPinnedPathsHydrated(true)
-  }, [me.id])
+  }, [me.id, me.active_workspace_id])
 
   useEffect(() => {
     if (!pinnedPathsHydrated) return
-    const key = `pc:pinnedWorkspacePaths:${me.id}`
+    const key = workspaceScopedStorageKey('pc:pinnedWorkspacePaths', me.id, me.active_workspace_id)
     try {
       window.localStorage.setItem(key, JSON.stringify(pendingWorkspacePaths))
     } catch {
       /* ignore local storage write failures */
     }
-  }, [me.id, pinnedPathsHydrated, pendingWorkspacePaths])
+  }, [me.id, me.active_workspace_id, pinnedPathsHydrated, pendingWorkspacePaths])
 
   useEffect(() => {
     setSidebarWidgetsHydrated(false)
-    const key = `pc:sidebarWidgets:${me.id}`
+    const key = workspaceScopedStorageKey('pc:sidebarWidgets', me.id, me.active_workspace_id)
     try {
       const raw = window.localStorage.getItem(key)
       if (raw) setSidebarWidgets(parseSidebarWidgets(JSON.parse(raw)))
@@ -749,17 +738,22 @@ function ChatSession({
       setSidebarWidgets({ ...DEFAULT_SIDEBAR_WIDGETS })
     }
     setSidebarWidgetsHydrated(true)
-  }, [me.id])
+  }, [me.id, me.active_workspace_id])
 
   useEffect(() => {
     if (!sidebarWidgetsHydrated) return
-    const key = `pc:sidebarWidgets:${me.id}`
+    const key = workspaceScopedStorageKey('pc:sidebarWidgets', me.id, me.active_workspace_id)
     try {
       window.localStorage.setItem(key, JSON.stringify(sidebarWidgets))
     } catch {
       /* ignore */
     }
-  }, [me.id, sidebarWidgetsHydrated, sidebarWidgets])
+  }, [me.id, me.active_workspace_id, sidebarWidgetsHydrated, sidebarWidgets])
+
+  useEffect(() => {
+    // Diagnose SSH scope belongs to current workspace context; clear on workspace switch.
+    setDiagnoseSshConnections([])
+  }, [me.id, me.active_workspace_id])
 
   const toggleSidebarWidget = (id: keyof SidebarWidgetsState) => {
     setSidebarWidgets((w) => {
@@ -1178,11 +1172,7 @@ function ChatSession({
   }
 
   const removePendingWorkspacePath = (path: string) => {
-    if (/diagnostics_summary\.md$/i.test(path)) {
-      setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
-      const html = path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
-      setSuppressedHtmlPaths((prev) => prev.filter((p) => p !== html))
-    } else if (/issue_analysis\.html$/i.test(path)) {
+    if (/issue_analysis\.html$/i.test(path)) {
       setSuppressedHtmlPaths((prev) => (prev.includes(path) ? prev : [...prev, path]))
       setPendingWorkspacePaths((prev) => prev.filter((p) => p !== path))
     } else {
@@ -1373,10 +1363,6 @@ function ChatSession({
           })
         },
       })
-      addPendingWorkspacePath(out.path)
-      if (/diagnostics_summary\.md$/i.test(out.path)) {
-        addPendingWorkspacePath(out.path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html'))
-      }
       await refreshWorkspaceFiles()
       setDiagnoseContext('')
       setDiagnoseSshConnections([])
@@ -1384,8 +1370,7 @@ function ChatSession({
       if (Array.isArray(out.activity) && out.activity.length > 0) {
         for (const step of out.activity) finalLines.push(`- ${step}`)
       }
-      finalLines.push(`- Output artifact prepared: ${out.name}`)
-      finalLines.push(`- Linked workspace artifact: ${out.path}`)
+      finalLines.push('- Diagnostics state captured in memory for final report rendering.')
       const finalBlock = [
         '[Diagnose Error Run Stages]',
         ...finalLines,
@@ -1399,17 +1384,16 @@ function ChatSession({
         const prefix = prev.slice(0, markerPos).trim()
         return prefix ? `${prefix}\n\n${finalBlock}` : finalBlock
       })
-      pushNotice(`Diagnostics artifact linked: ${out.name}`, 'success')
+      pushNotice('Diagnostics run complete. Generating final report...', 'success')
       const followupAssistantRaw = await send({
         text: finalBlock,
-        linkedPaths: [out.path],
         submission: 'automation',
       })
       const followupAssistant = followupAssistantRaw
         .replace(/^done\s*[—-].*$/gim, '')
         .replace(/^.*updated the final report in:.*$/gim, '')
         .trim()
-      let htmlPathCandidate = out.path.replace(/diagnostics_summary\.md$/i, 'issue_analysis.html')
+      let htmlPathCandidate = ''
       try {
         const html = await renderDiagnoseHtmlReport(undefined, undefined, undefined, followupAssistant)
         htmlPathCandidate = html.path
@@ -1420,8 +1404,7 @@ function ChatSession({
       await refreshWorkspaceFiles()
       setPendingWorkspacePaths((prev) => {
         const next = [...prev]
-        if (!next.includes(out.path)) next.push(out.path)
-        if (!next.includes(htmlPathCandidate)) next.push(htmlPathCandidate)
+        if (htmlPathCandidate && !next.includes(htmlPathCandidate)) next.push(htmlPathCandidate)
         return next
       })
     } catch (err) {

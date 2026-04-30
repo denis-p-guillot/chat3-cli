@@ -1433,13 +1433,18 @@ def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
 
 
 @app.get("/api/connectivity/ssh")
-def ssh_connections_list(user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
-    rows = list_ssh_connections(user.id)
+def ssh_connections_list(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    rows = list_ssh_connections(user.id, ws_id)
     return {"connections": [_ssh_row_to_public(r) for r in rows]}
 
 
 @app.post("/api/connectivity/ssh")
-def ssh_connections_upsert(body: SshConnectionIn, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+def ssh_connections_upsert(
+    body: SshConnectionIn,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
     auth_mode = body.auth_mode.strip()
     private_key = (body.private_key or "").strip()
     password = (body.password or "").strip()
@@ -1456,6 +1461,7 @@ def ssh_connections_upsert(body: SshConnectionIn, user: UserRow = Depends(get_cu
     password_enc = encrypt_api_key(password) if password else None
     cid = upsert_ssh_connection(
         user_id=user.id,
+        workspace_id=ws_id,
         name=body.name,
         host=body.host,
         port=body.port,
@@ -1464,22 +1470,30 @@ def ssh_connections_upsert(body: SshConnectionIn, user: UserRow = Depends(get_cu
         private_key_encrypted=private_key_enc,
         password_encrypted=password_enc,
     )
-    row = get_ssh_connection(user.id, cid)
+    row = get_ssh_connection(user.id, ws_id, cid)
     if row is None:
         raise HTTPException(status_code=500, detail="Could not read saved SSH connection.")
     return {"connection": _ssh_row_to_public(row)}
 
 
 @app.delete("/api/connectivity/ssh/{connection_id}")
-def ssh_connections_delete(connection_id: int, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
-    if not delete_ssh_connection(user.id, connection_id):
+def ssh_connections_delete(
+    connection_id: int,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    if not delete_ssh_connection(user.id, ws_id, connection_id):
         raise HTTPException(status_code=404, detail="SSH connection not found.")
     return {"status": "ok"}
 
 
 @app.post("/api/connectivity/ssh/{connection_id}/test")
-def ssh_connections_test(connection_id: int, user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
-    row = get_ssh_connection(user.id, connection_id)
+def ssh_connections_test(
+    connection_id: int,
+    ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
+) -> dict[str, Any]:
+    user, ws_id, _ws = ctx
+    row = get_ssh_connection(user.id, ws_id, connection_id)
     if row is None:
         raise HTTPException(status_code=404, detail="SSH connection not found.")
     key: str | None = None
@@ -1530,7 +1544,7 @@ def _run_diagnose_error(
         if not clean or clean in seen:
             continue
         seen.add(clean)
-        row = next((r for r in list_ssh_connections(user.id) if r.name == clean), None)
+        row = next((r for r in list_ssh_connections(user.id, ws_id) if r.name == clean), None)
         if row is None:
             push_activity(f"Skipped SSH connection '{clean}' (not found).")
             continue
@@ -1690,28 +1704,7 @@ def _run_diagnose_error(
             "activity": activity,
         }
 
-    push_activity("Deferring final report generation until after prompt execution.")
-    root = ensure_named_workspace_layout(user.id, ws_id)
-    summary_path = root / "diagnostics_summary.md"
-    lines: list[str] = [
-        "# Diagnose Error Summary",
-        "",
-        "Final HTML report generation is deferred for interactive prompt execution.",
-        "",
-        "## Activity",
-    ]
-    lines.extend([f"- {x}" for x in activity])
-    lines.append("")
-    lines.append("## Connection Findings")
-    for c in attached:
-        lines.append(f"### {c.get('name', 'unknown')}")
-        findings = c.get("findings", []) or []
-        if findings:
-            lines.extend([f"- {f}" for f in findings[:12]])
-        else:
-            lines.append("- No findings.")
-        lines.append("")
-    summary_path.write_text("\n".join(lines), encoding="utf-8")
+    push_activity("Deferring artifact generation until after prompt execution.")
     _diagnose_state_path(user.id, ws_id).write_text(
         json.dumps(
             {
@@ -1723,8 +1716,12 @@ def _run_diagnose_error(
         ),
         encoding="utf-8",
     )
-    rel = f"users/{user.id}/w/{ws_id}/diagnostics_summary.md"
-    return {"status": "ok", "path": rel, "name": "diagnostics_summary.md", "ssh_connections": attached, "activity": activity}
+    return {
+        "status": "ok",
+        "name": "diagnose_state",
+        "ssh_connections": attached,
+        "activity": activity,
+    }
 
 
 @app.post("/api/tools/plantuml/render")

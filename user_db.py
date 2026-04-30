@@ -33,6 +33,7 @@ class WorkspaceRow:
 class SshConnectionRow:
     id: int
     user_id: int
+    workspace_id: int
     name: str
     host: str
     port: int
@@ -72,6 +73,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS ssh_connections (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            workspace_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             host TEXT NOT NULL,
             port INTEGER NOT NULL DEFAULT 22,
@@ -81,7 +83,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             password_encrypted TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(user_id, name)
+            UNIQUE(user_id, workspace_id, name)
         )
         """
     )
@@ -92,6 +94,78 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE ssh_connections ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'private_key'")
     if "password_encrypted" not in ssh_cols:
         conn.execute("ALTER TABLE ssh_connections ADD COLUMN password_encrypted TEXT")
+    needs_workspace_migration = "workspace_id" not in ssh_cols
+    if needs_workspace_migration:
+        # Migrate legacy user-scoped SSH rows to workspace-scoped rows.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ssh_connections_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                workspace_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                host TEXT NOT NULL,
+                port INTEGER NOT NULL DEFAULT 22,
+                username TEXT NOT NULL,
+                auth_mode TEXT NOT NULL DEFAULT 'private_key',
+                private_key_encrypted TEXT,
+                password_encrypted TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                UNIQUE(user_id, workspace_id, name)
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ssh_connections_v2_user ON ssh_connections_v2(user_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ssh_connections_v2_user_workspace ON ssh_connections_v2(user_id, workspace_id)"
+        )
+        conn.execute(
+            """
+            INSERT INTO ssh_connections_v2 (
+                id, user_id, workspace_id, name, host, port, username, auth_mode,
+                private_key_encrypted, password_encrypted, created_at, updated_at
+            )
+            SELECT
+                s.id,
+                s.user_id,
+                COALESCE(
+                    (
+                        SELECT u.active_workspace_id
+                        FROM users u
+                        WHERE u.id = s.user_id
+                    ),
+                    (
+                        SELECT w.id
+                        FROM workspaces w
+                        WHERE w.user_id = s.user_id
+                        ORDER BY w.id
+                        LIMIT 1
+                    ),
+                    1
+                ) AS workspace_id,
+                s.name,
+                s.host,
+                s.port,
+                s.username,
+                COALESCE(NULLIF(trim(s.auth_mode), ''), 'private_key') AS auth_mode,
+                s.private_key_encrypted,
+                s.password_encrypted,
+                s.created_at,
+                s.updated_at
+            FROM ssh_connections s
+            """
+        )
+        conn.execute("DROP TABLE ssh_connections")
+        conn.execute("ALTER TABLE ssh_connections_v2 RENAME TO ssh_connections")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ssh_connections_user ON ssh_connections(user_id)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ssh_connections_user_workspace ON ssh_connections(user_id, workspace_id)"
+        )
+    else:
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ssh_connections_user_workspace ON ssh_connections(user_id, workspace_id)"
+        )
     if "private_key_encrypted" in ssh_cols:
         conn.execute(
             """
@@ -351,6 +425,7 @@ def _ssh_row_from_row(row: sqlite3.Row) -> SshConnectionRow:
     return SshConnectionRow(
         id=row["id"],
         user_id=row["user_id"],
+        workspace_id=int(row["workspace_id"]),
         name=row["name"] or "",
         host=row["host"] or "",
         port=int(row["port"] or 22),
@@ -363,33 +438,33 @@ def _ssh_row_from_row(row: sqlite3.Row) -> SshConnectionRow:
     )
 
 
-def list_ssh_connections(user_id: int) -> list[SshConnectionRow]:
+def list_ssh_connections(user_id: int, workspace_id: int) -> list[SshConnectionRow]:
     conn = _connect()
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
+            SELECT id, user_id, workspace_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
-            WHERE user_id = ?
+            WHERE user_id = ? AND workspace_id = ?
             ORDER BY lower(name), id
             """,
-            (user_id,),
+            (user_id, workspace_id),
         )
         return [_ssh_row_from_row(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
 
-def get_ssh_connection(user_id: int, connection_id: int) -> SshConnectionRow | None:
+def get_ssh_connection(user_id: int, workspace_id: int, connection_id: int) -> SshConnectionRow | None:
     conn = _connect()
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
+            SELECT id, user_id, workspace_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
-            WHERE user_id = ? AND id = ?
+            WHERE user_id = ? AND workspace_id = ? AND id = ?
             """,
-            (user_id, connection_id),
+            (user_id, workspace_id, connection_id),
         )
         row = cur.fetchone()
         return _ssh_row_from_row(row) if row else None
@@ -397,16 +472,16 @@ def get_ssh_connection(user_id: int, connection_id: int) -> SshConnectionRow | N
         conn.close()
 
 
-def get_ssh_connection_by_name(user_id: int, name: str) -> SshConnectionRow | None:
+def get_ssh_connection_by_name(user_id: int, workspace_id: int, name: str) -> SshConnectionRow | None:
     conn = _connect()
     try:
         cur = conn.execute(
             """
-            SELECT id, user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
+            SELECT id, user_id, workspace_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted, created_at, updated_at
             FROM ssh_connections
-            WHERE user_id = ? AND name = ?
+            WHERE user_id = ? AND workspace_id = ? AND name = ?
             """,
-            (user_id, name.strip()),
+            (user_id, workspace_id, name.strip()),
         )
         row = cur.fetchone()
         return _ssh_row_from_row(row) if row else None
@@ -416,6 +491,7 @@ def get_ssh_connection_by_name(user_id: int, name: str) -> SshConnectionRow | No
 
 def upsert_ssh_connection(
     user_id: int,
+    workspace_id: int,
     name: str,
     host: str,
     port: int,
@@ -433,15 +509,15 @@ def upsert_ssh_connection(
     conn = _connect()
     try:
         existing = conn.execute(
-            "SELECT id FROM ssh_connections WHERE user_id = ? AND name = ?",
-            (user_id, clean_name),
+            "SELECT id FROM ssh_connections WHERE user_id = ? AND workspace_id = ? AND name = ?",
+            (user_id, workspace_id, clean_name),
         ).fetchone()
         if existing:
             conn.execute(
                 """
                 UPDATE ssh_connections
                 SET host = ?, port = ?, username = ?, auth_mode = ?, private_key_encrypted = ?, password_encrypted = ?, updated_at = datetime('now')
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND workspace_id = ?
                 """,
                 (
                     clean_host,
@@ -452,17 +528,21 @@ def upsert_ssh_connection(
                     password_encrypted,
                     int(existing["id"]),
                     user_id,
+                    workspace_id,
                 ),
             )
             conn.commit()
             return int(existing["id"])
         cur = conn.execute(
             """
-            INSERT INTO ssh_connections (user_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ssh_connections (
+                user_id, workspace_id, name, host, port, username, auth_mode, private_key_encrypted, password_encrypted
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
+                workspace_id,
                 clean_name,
                 clean_host,
                 int(port),
@@ -478,12 +558,12 @@ def upsert_ssh_connection(
         conn.close()
 
 
-def delete_ssh_connection(user_id: int, connection_id: int) -> bool:
+def delete_ssh_connection(user_id: int, workspace_id: int, connection_id: int) -> bool:
     conn = _connect()
     try:
         cur = conn.execute(
-            "DELETE FROM ssh_connections WHERE user_id = ? AND id = ?",
-            (user_id, connection_id),
+            "DELETE FROM ssh_connections WHERE user_id = ? AND workspace_id = ? AND id = ?",
+            (user_id, workspace_id, connection_id),
         )
         conn.commit()
         return cur.rowcount > 0

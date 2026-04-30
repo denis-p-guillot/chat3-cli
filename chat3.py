@@ -1292,9 +1292,10 @@ def ssh_list_connections() -> str:
     user_id = active_workspace_user_id()
     if user_id is None:
         return json_result(ok=False, error="No authenticated user context for SSH connectivity.")
-    from user_db import list_ssh_connections
+    from user_db import ensure_user_workspaces_ready, list_ssh_connections
 
-    rows = list_ssh_connections(user_id)
+    ws_id = ensure_user_workspaces_ready(user_id)
+    rows = list_ssh_connections(user_id, ws_id)
     return json_result(
         ok=True,
         count=len(rows),

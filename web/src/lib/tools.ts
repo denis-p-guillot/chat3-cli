@@ -40,8 +40,8 @@ type DiagnoseStreamEvent =
       type: 'result'
       result: {
         status: string
-        path: string
-        name: string
+        path?: string
+        name?: string
         activity?: string[]
         ssh_connections?: Array<Record<string, unknown>>
       }
@@ -56,16 +56,16 @@ export async function runDiagnoseErrorStream(
     onActivity?: (step: string) => void
     onResult?: (result: {
       status: string
-      path: string
-      name: string
+      path?: string
+      name?: string
       activity?: string[]
       ssh_connections?: Array<Record<string, unknown>>
     }) => void
   } = {},
 ): Promise<{
   status: string
-  path: string
-  name: string
+  path?: string
+  name?: string
   activity?: string[]
   ssh_connections?: Array<Record<string, unknown>>
 }> {
@@ -84,8 +84,8 @@ export async function runDiagnoseErrorStream(
   let finalResult:
     | {
         status: string
-        path: string
-        name: string
+        path?: string
+        name?: string
         activity?: string[]
         ssh_connections?: Array<Record<string, unknown>>
       }
