@@ -71,6 +71,11 @@ from chat3 import (
     workspace_session,
 )
 from local_file_analysis import MAX_ANALYSIS_READ_BYTES, analyze_workspace_file
+from prompt_optimization import (
+    build_diagnose_followup_digest,
+    expand_user_message_with_workspace as _expand_user_message_budgeted,
+    workspace_files_manifest,
+)
 from ssh_exec import run_ssh_command
 from user_crypto import decrypt_api_key, encrypt_api_key
 from user_db import (
@@ -109,9 +114,9 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api")
 
 # Stored on disk under workspace/users/<id>/w/<ws_id>/uploads/...
-MAX_FILE_BYTES = 500 * 1024 * 1024
-MAX_ATTACHMENTS = 20
-MAX_TOTAL_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024
+MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024
+MAX_ATTACHMENTS = 200
+MAX_TOTAL_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
 MAX_WORKSPACE_LIST_ENTRIES = 800
 MAX_ARCHIVE_EXTRACT_FILES = 4_000
 MAX_ARCHIVE_EXTRACT_TOTAL_BYTES = 1_500_000_000
@@ -353,15 +358,9 @@ def expand_workspace_file(rel: str, user_id: int) -> str:
 
 
 def expand_user_message_with_workspace(text: str, workspace_files: list[str], user_id: int) -> str:
-    parts: list[str] = []
-    if text.strip():
-        parts.append(text.strip())
     if len(workspace_files) > MAX_ATTACHMENTS:
-        parts.append(f"[Too many workspace files (max {MAX_ATTACHMENTS}); extras ignored.]")
         workspace_files = workspace_files[:MAX_ATTACHMENTS]
-    for rel in workspace_files:
-        parts.append(expand_workspace_file(rel, user_id))
-    return "\n\n".join(parts)
+    return _expand_user_message_budgeted(text, workspace_files, user_id, expand_workspace_file)
 
 
 class ChatMessage(BaseModel):
@@ -413,10 +412,19 @@ def meta(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace
 
 
 def prepare_history(body: ChatBody, user_id: int) -> list[dict[str, str]]:
-    history: list[dict[str, str]] = []
-    for m in body.messages:
+    last_expand_idx = -1
+    for i, m in enumerate(body.messages):
         if m.role == "user" and m.workspace_files:
-            content = expand_user_message_with_workspace(m.content, list(m.workspace_files), user_id)
+            last_expand_idx = i
+
+    history: list[dict[str, str]] = []
+    for i, m in enumerate(body.messages):
+        if m.role == "user" and m.workspace_files:
+            files = list(m.workspace_files)[:MAX_ATTACHMENTS]
+            if i == last_expand_idx:
+                content = expand_user_message_with_workspace(m.content, files, user_id)
+            else:
+                content = workspace_files_manifest(m.content, files)
         else:
             content = m.content
         history.append({"role": m.role, "content": content})
@@ -569,7 +577,7 @@ async def upload_workspace_files(
                             dest.unlink(missing_ok=True)
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"File too large (max {MAX_FILE_BYTES // (1024 * 1024)} MB per file).",
+                                detail=f"File too large (max {MAX_FILE_BYTES // (1024 ** 3)} GB per file).",
                             )
                         f.write(chunk)
             except HTTPException:
@@ -1705,12 +1713,14 @@ def _run_diagnose_error(
         }
 
     push_activity("Deferring artifact generation until after prompt execution.")
+    followup_prompt = build_diagnose_followup_digest(body.context, attached, activity)
     _diagnose_state_path(user.id, ws_id).write_text(
         json.dumps(
             {
                 "context": body.context,
                 "ssh_connections_data": attached,
                 "activity": activity,
+                "followup_prompt": followup_prompt,
             },
             ensure_ascii=False,
         ),
@@ -1721,6 +1731,7 @@ def _run_diagnose_error(
         "name": "diagnose_state",
         "ssh_connections": attached,
         "activity": activity,
+        "followup_prompt": followup_prompt,
     }
 
 

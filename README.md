@@ -96,7 +96,7 @@ Development (two terminals):
    cd web && npm install && npm run dev
    ```
 
-Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The UI streams tool calls and assistant replies over SSE. Attached files are **saved under** `workspace/uploads/` (up to 500 MB per file). The API **parses and summarizes them locally**; the model receives those summaries and uses tools to read or change files—it does not get raw full-file dumps in the chat.
+Then open the URL Vite prints (usually `http://127.0.0.1:5173`). The UI streams tool calls and assistant replies over SSE. Attached files are **saved under** `workspace/uploads/` (up to 200 files per request, 5 GB per file, 50 GB total per upload). The API **parses and summarizes them locally** (up to **20 files** and **~120k characters** of summaries per message, prioritized logs/diagnostics first); older turns keep path-only manifests. The model uses tools for full reads—it does not get raw multi-GB dumps in the chat.
 
 Production-style (single process serving API + built static files):
 

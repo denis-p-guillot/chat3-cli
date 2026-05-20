@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChatMarkdown } from './components/ChatMarkdown'
 import {
   MAX_ATTACHMENTS,
+  MAX_AUTO_EXPAND_FILES,
   MAX_FILE_BYTES,
   MAX_TOTAL_UPLOAD_BYTES,
+  formatByteLimit,
   uploadWorkspaceFiles,
   type UploadedWorkspaceFile,
 } from './lib/attachments'
@@ -1010,14 +1012,14 @@ function ChatSession({
     let total = 0
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
-        const reason = `"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`
+        const reason = `"${f.name}" is too large (max ${formatByteLimit(MAX_FILE_BYTES)} per file).`
         pushNotice(reason, 'error')
         return { ok: false, reason }
       }
       total += f.size
     }
     if (total > MAX_TOTAL_UPLOAD_BYTES) {
-      const reason = `Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`
+      const reason = `Total upload size is too large (max ${formatByteLimit(MAX_TOTAL_UPLOAD_BYTES)} per request).`
       pushNotice(reason, 'error')
       return { ok: false, reason }
     }
@@ -1035,15 +1037,21 @@ function ChatSession({
 
     const userId = uid()
     const uniqueWorkspacePaths = [...new Set([...linkedPaths, ...uploaded.map((u) => u.path)])]
-    // Backend enforces max_length=20 for workspace_files; keep diagnose summary/report links first.
+    // Prioritize diagnose artifacts; cap prompt expansion (server also enforces a char budget).
     const prioritizedWorkspacePaths = [
       ...uniqueWorkspacePaths.filter((p) => /diagnostics_summary\.md$/i.test(p) || /issue_analysis\.html$/i.test(p)),
-      ...uniqueWorkspacePaths.filter((p) => !/diagnostics_summary\.md$/i.test(p) && !/issue_analysis\.html$/i.test(p)),
+      ...uniqueWorkspacePaths.filter((p) => /\/diagnostics\//i.test(p)),
+      ...uniqueWorkspacePaths.filter(
+        (p) =>
+          !/diagnostics_summary\.md$/i.test(p) &&
+          !/issue_analysis\.html$/i.test(p) &&
+          !/\/diagnostics\//i.test(p),
+      ),
     ]
-    const workspacePaths = prioritizedWorkspacePaths.slice(0, MAX_ATTACHMENTS)
-    if (uniqueWorkspacePaths.length > MAX_ATTACHMENTS) {
+    const workspacePaths = [...new Set(prioritizedWorkspacePaths)].slice(0, MAX_AUTO_EXPAND_FILES)
+    if (uniqueWorkspacePaths.length > MAX_AUTO_EXPAND_FILES) {
       pushNotice(
-        `Too many linked files (${uniqueWorkspacePaths.length}). Only the first ${MAX_ATTACHMENTS} were sent.`,
+        `Too many linked files (${uniqueWorkspacePaths.length}). Only the top ${MAX_AUTO_EXPAND_FILES} are summarized in the prompt; others remain on disk for tools.`,
         'error',
       )
     }
@@ -1368,20 +1376,26 @@ function ChatSession({
       await refreshWorkspaceFiles()
       setDiagnoseContext('')
       setDiagnoseSshConnections([])
-      const finalLines: string[] = []
-      if (Array.isArray(out.activity) && out.activity.length > 0) {
-        for (const step of out.activity) finalLines.push(`- ${step}`)
+      const artifactPaths: string[] = []
+      for (const conn of out.ssh_connections ?? []) {
+        const paths = conn.artifact_paths
+        if (Array.isArray(paths)) {
+          for (const p of paths) {
+            if (typeof p === 'string' && p.trim()) artifactPaths.push(p.trim())
+          }
+        }
       }
-      finalLines.push('- Diagnostics state captured in memory for final report rendering.')
-      const finalBlock = [
-        '[Diagnose Error Run Stages]',
-        ...finalLines,
-        '',
-        'Continue immediately: inspect linked artifacts, summarize the top 5 findings, state the most likely root cause, list recommended next actions, and propose a remediation plan. Do NOT claim files were updated; provide analysis content only. This content will be embedded into the final issue_analysis report.',
-      ].join('\n')
+      const followupText =
+        typeof out.followup_prompt === 'string' && out.followup_prompt.trim()
+          ? out.followup_prompt.trim()
+          : [
+              '[Diagnose Error — analysis request]',
+              'Diagnostics finished. Summarize top findings, root cause, next actions, and remediation plan.',
+            ].join('\n')
       pushNotice('Diagnostics run complete. Generating final report...', 'success')
       const followup = await send({
-        text: finalBlock,
+        text: followupText,
+        linkedPaths: artifactPaths.length > 0 ? artifactPaths : undefined,
         submission: 'automation',
       })
       if (!followup.ok) {

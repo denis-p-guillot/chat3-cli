@@ -44,6 +44,7 @@ type DiagnoseStreamEvent =
         name?: string
         activity?: string[]
         ssh_connections?: Array<Record<string, unknown>>
+        followup_prompt?: string
       }
     }
   | { type: 'error'; message: string }
@@ -60,6 +61,7 @@ export async function runDiagnoseErrorStream(
       name?: string
       activity?: string[]
       ssh_connections?: Array<Record<string, unknown>>
+      followup_prompt?: string
     }) => void
   } = {},
 ): Promise<{
@@ -68,6 +70,7 @@ export async function runDiagnoseErrorStream(
   name?: string
   activity?: string[]
   ssh_connections?: Array<Record<string, unknown>>
+  followup_prompt?: string
 }> {
   const res = await fetch('/api/tools/diagnose-error/stream', {
     method: 'POST',

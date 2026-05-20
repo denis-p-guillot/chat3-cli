@@ -1,10 +1,20 @@
 /** Limits aligned with server.py */
 
-export const MAX_ATTACHMENTS = 20
-/** Per-file max size on disk (500 MB) */
-export const MAX_FILE_BYTES = 500 * 1024 * 1024
-/** Max total size for one upload request (10 GB) */
-export const MAX_TOTAL_UPLOAD_BYTES = 10 * 1024 * 1024 * 1024
+export const MAX_ATTACHMENTS = 200
+/** Max files fully summarized in one chat prompt (server also enforces a char budget). */
+export const MAX_AUTO_EXPAND_FILES = 20
+/** Per-file max size on disk (5 GB) */
+export const MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024
+/** Max total size for one upload request (50 GB) */
+export const MAX_TOTAL_UPLOAD_BYTES = 50 * 1024 * 1024 * 1024
+
+/** Human-readable size for UI error messages. */
+export function formatByteLimit(bytes: number): string {
+  if (bytes >= 1024 ** 3 && bytes % (1024 ** 3) === 0) {
+    return `${bytes / 1024 ** 3} GB`
+  }
+  return `${Math.round(bytes / (1024 ** 2))} MB`
+}
 
 export type UploadedWorkspaceFile = {
   path: string

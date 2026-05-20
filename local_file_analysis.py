@@ -10,6 +10,7 @@ import hashlib
 import io
 import json
 import mimetypes
+import re
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -18,12 +19,73 @@ MAX_ANALYSIS_READ_BYTES = 4 * 1024 * 1024
 MAX_SAMPLE_LINES = 60
 MAX_SAMPLE_CHARS = 12000
 
+_LOG_ERROR_LINE_RE = re.compile(
+    r"\b(error|exception|traceback|fatal|critical|failed|panic|segfault|timeout|refused)\b",
+    re.IGNORECASE,
+)
+_MAX_LOG_CLUSTERS = 12
+_MAX_CLUSTER_CONTEXT = 4
+_MAX_CLUSTER_SNIPPET_LINES = 10
+_LOG_LIKE_SUFFIXES = {".log", ".trace", ".out"}
+
 
 def _sha256_file_prefix(path: Path, limit: int = 1_048_576) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
         h.update(f.read(limit))
     return h.hexdigest()[:16] + "…"
+
+
+def _is_log_like_path(path: Path) -> bool:
+    low = path.name.lower()
+    if any(low.endswith(s) for s in _LOG_LIKE_SUFFIXES):
+        return True
+    return any(tok in low for tok in ("error", "traceback", "odoo", "nginx", "postgres", "pg_"))
+
+
+def _summarize_log_error_clusters(text: str) -> str | None:
+    """Extract compact error/traceback clusters instead of blind head/tail sampling."""
+    lines = text.splitlines()
+    if len(lines) < 3:
+        return None
+
+    hit_indices: list[int] = []
+    for i, line in enumerate(lines):
+        if _LOG_ERROR_LINE_RE.search(line):
+            hit_indices.append(i)
+    if not hit_indices:
+        return None
+
+    clusters: list[tuple[int, int]] = []
+    start = hit_indices[0]
+    end = hit_indices[0]
+    for idx in hit_indices[1:]:
+        if idx <= end + _MAX_CLUSTER_CONTEXT + 1:
+            end = idx
+        else:
+            clusters.append((start, end))
+            start = idx
+            end = idx
+    clusters.append((start, end))
+
+    parts = [
+        f"- **Error-line clusters:** {len(hit_indices)} matching lines in {len(lines):,} total "
+        f"({len(clusters)} cluster(s) below)"
+    ]
+    for ci, (s, e) in enumerate(clusters[:_MAX_LOG_CLUSTERS], start=1):
+        lo = max(0, s - _MAX_CLUSTER_CONTEXT)
+        hi = min(len(lines), e + _MAX_CLUSTER_CONTEXT + 1)
+        snippet = lines[lo:hi]
+        if len(snippet) > _MAX_CLUSTER_SNIPPET_LINES:
+            snippet = snippet[:_MAX_CLUSTER_SNIPPET_LINES] + ["… [cluster truncated]"]
+        parts.append(f"- **Cluster {ci}** (lines {lo + 1}–{hi}):")
+        parts.append("```text\n" + "\n".join(snippet) + "\n```")
+    if len(clusters) > _MAX_LOG_CLUSTERS:
+        parts.append(f"- … and {len(clusters) - _MAX_LOG_CLUSTERS} more cluster(s) not shown")
+    parts.append(
+        "\n*Non-error lines omitted. Use `grep_files` or `fs_read_file_chunk` for the full file.*"
+    )
+    return "\n".join(parts)
 
 
 def _sample_text_lines(text: str, max_lines: int = MAX_SAMPLE_LINES, max_chars: int = MAX_SAMPLE_CHARS) -> str:
@@ -175,8 +237,13 @@ def analyze_workspace_file(path: Path, rel: str) -> str:
     parts.append(f"- **Lines (in analyzed portion):** ~{line_count}")
     if truncated:
         parts.append("- **Note:** only the first portion of the file was analyzed locally (size cap).")
-    parts.append("- **Sample (local excerpt):**")
-    parts.append("```text\n" + _sample_text_lines(text) + "\n```")
+    log_clusters = _summarize_log_error_clusters(text) if _is_log_like_path(path) else None
+    if log_clusters:
+        parts.append("- **Log analysis (error-focused):**")
+        parts.append(log_clusters)
+    else:
+        parts.append("- **Sample (local excerpt):**")
+        parts.append("```text\n" + _sample_text_lines(text) + "\n```")
     parts.append(
         "\n*Use `fs_read_file`, `grep_files`, or `fs_read_file_chunk` for authoritative full content.*"
     )
