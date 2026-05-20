@@ -620,6 +620,7 @@ function ChatSession({
   const [sidebarWidgets, setSidebarWidgets] = useState<SidebarWidgetsState>(DEFAULT_SIDEBAR_WIDGETS)
   const [sidebarWidgetsHydrated, setSidebarWidgetsHydrated] = useState(false)
   const [diagnoseBusy, setDiagnoseBusy] = useState(false)
+  const [diagnoseLiveSteps, setDiagnoseLiveSteps] = useState<string[]>([])
   const [diagnoseErr, setDiagnoseErr] = useState<string | null>(null)
   const [diagnoseContext, setDiagnoseContext] = useState('')
   const [diagnoseSshConnections, setDiagnoseSshConnections] = useState<string[]>([])
@@ -810,7 +811,7 @@ function ChatSession({
       })
     })
     return () => cancelAnimationFrame(id)
-  }, [messages, busy, tick])
+  }, [messages, busy, diagnoseBusy, diagnoseLiveSteps, tick])
 
   const runStream = async (
     payload: ChatMessagePayload[],
@@ -980,6 +981,8 @@ function ChatSession({
     return assistantOutput
   }
 
+  type SendResult = { ok: true; assistant: string } | { ok: false; reason: string }
+
   const send = async (opts?: {
     text?: string
     linkedPaths?: string[]
@@ -987,33 +990,36 @@ function ChatSession({
     proposalTrace?: boolean
     /** Defaults to manual when omitted (composer). */
     submission?: 'manual' | 'automation'
-  }): Promise<string> => {
-    if (!historyHydrated) return ''
+  }): Promise<SendResult> => {
+    if (!historyHydrated) return { ok: false, reason: 'Chat is still loading.' }
     const text = (opts?.text ?? input).trim()
     const files = pendingFiles
     const linkedPaths =
       opts?.linkedPaths ??
       expandPinnedWorkspacePaths(pendingWorkspacePaths).filter((p) => !suppressedHtmlPaths.includes(p))
-    if ((!text && files.length === 0 && linkedPaths.length === 0) || busy) return ''
+    if (!text && files.length === 0 && linkedPaths.length === 0) {
+      return { ok: false, reason: 'Nothing to send.' }
+    }
+    if (busy) return { ok: false, reason: 'A reply is already in progress.' }
 
     if (files.length > MAX_ATTACHMENTS) {
-      pushNotice(`You can attach at most ${MAX_ATTACHMENTS} files.`, 'error')
-      return ''
+      const reason = `You can attach at most ${MAX_ATTACHMENTS} files.`
+      pushNotice(reason, 'error')
+      return { ok: false, reason }
     }
     let total = 0
     for (const f of files) {
       if (f.size > MAX_FILE_BYTES) {
-        pushNotice(`"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`, 'error')
-        return ''
+        const reason = `"${f.name}" is too large (max ${MAX_FILE_BYTES / (1024 * 1024)} MB per file).`
+        pushNotice(reason, 'error')
+        return { ok: false, reason }
       }
       total += f.size
     }
     if (total > MAX_TOTAL_UPLOAD_BYTES) {
-      pushNotice(
-        `Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`,
-        'error',
-      )
-      return ''
+      const reason = `Total upload size is too large (max ${MAX_TOTAL_UPLOAD_BYTES / (1024 * 1024)} MB per request).`
+      pushNotice(reason, 'error')
+      return { ok: false, reason }
     }
 
     let uploaded: UploadedWorkspaceFile[] = []
@@ -1023,7 +1029,7 @@ function ChatSession({
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         setMessages((prev) => [...prev, { id: uid(), role: 'assistant', content: `**Error:** ${msg}` }])
-        return ''
+        return { ok: false, reason: msg }
       }
     }
 
@@ -1085,7 +1091,8 @@ function ChatSession({
       void refreshWorkspaceFiles()
     }
 
-    return await runStream(payload, { proposalTrace: opts?.proposalTrace })
+    const assistant = await runStream(payload, { proposalTrace: opts?.proposalTrace })
+    return { ok: true, assistant }
   }
 
   const stop = () => {
@@ -1342,25 +1349,20 @@ function ChatSession({
 
   const diagnoseError = async () => {
     setDiagnoseErr(null)
+    if (!historyHydrated) {
+      setDiagnoseErr('Chat is not ready yet. Wait a moment and try again.')
+      return
+    }
+    if (busy) {
+      setDiagnoseErr('Wait for the current chat reply to finish.')
+      return
+    }
     setDiagnoseBusy(true)
+    setDiagnoseLiveSteps([])
     try {
-      let liveBlock = '[Diagnose Error Run Stages]\n'
-      let lastStep = ''
-      setInput((prev) => (prev.trim() ? `${prev.trim()}\n\n${liveBlock}` : liveBlock))
       const out = await runDiagnoseErrorStream(diagnoseContext, diagnoseSshConnections, {
         onActivity: (step) => {
-          if (step === lastStep) return
-          lastStep = step
-          liveBlock += `- ${step}\n`
-          setInput((prev) => {
-            const marker = '[Diagnose Error Run Stages]'
-            const markerPos = prev.lastIndexOf(marker)
-            if (markerPos < 0) {
-              return prev.trim() ? `${prev.trim()}\n\n${liveBlock}` : liveBlock
-            }
-            const prefix = prev.slice(0, markerPos).trim()
-            return prefix ? `${prefix}\n\n${liveBlock}` : liveBlock
-          })
+          setDiagnoseLiveSteps((prev) => (prev.length > 0 && prev[prev.length - 1] === step ? prev : [...prev, step]))
         },
       })
       await refreshWorkspaceFiles()
@@ -1377,19 +1379,15 @@ function ChatSession({
         '',
         'Continue immediately: inspect linked artifacts, summarize the top 5 findings, state the most likely root cause, list recommended next actions, and propose a remediation plan. Do NOT claim files were updated; provide analysis content only. This content will be embedded into the final issue_analysis report.',
       ].join('\n')
-      setInput((prev) => {
-        const marker = '[Diagnose Error Run Stages]'
-        const markerPos = prev.lastIndexOf(marker)
-        if (markerPos < 0) return prev.trim() ? `${prev.trim()}\n\n${finalBlock}` : finalBlock
-        const prefix = prev.slice(0, markerPos).trim()
-        return prefix ? `${prefix}\n\n${finalBlock}` : finalBlock
-      })
       pushNotice('Diagnostics run complete. Generating final report...', 'success')
-      const followupAssistantRaw = await send({
+      const followup = await send({
         text: finalBlock,
         submission: 'automation',
       })
-      const followupAssistant = followupAssistantRaw
+      if (!followup.ok) {
+        throw new Error(followup.reason)
+      }
+      const followupAssistant = followup.assistant
         .replace(/^done\s*[—-].*$/gim, '')
         .replace(/^.*updated the final report in:.*$/gim, '')
         .trim()
@@ -1411,6 +1409,7 @@ function ChatSession({
       setDiagnoseErr(err instanceof Error ? err.message : String(err))
     } finally {
       setDiagnoseBusy(false)
+      setDiagnoseLiveSteps([])
     }
   }
 
@@ -1453,10 +1452,13 @@ function ChatSession({
           production: proposalForm.includeProductionInstance,
         },
       })
-      const reply = await send({ text, proposalTrace: true, submission: 'automation' })
+      const sent = await send({ text, proposalTrace: true, submission: 'automation' })
+      if (!sent.ok) {
+        throw new Error(sent.reason)
+      }
       setProposalForm(emptyProposalForm())
       pushNotice('PurpleCloud proposal request sent.', 'success')
-      const clean = reply.trim()
+      const clean = sent.assistant.trim()
       const looksLikeAssistantError = /^\*\*Error:\*\*/m.test(clean)
       if (!looksLikeAssistantError) {
         setProposalSlidesBanner({
@@ -1475,6 +1477,10 @@ function ChatSession({
 
   const live = busy ? streamRef.current : null
   const execStatusText = (() => {
+    if (diagnoseBusy && !busy) {
+      const step = diagnoseLiveSteps[diagnoseLiveSteps.length - 1]
+      return step ? `Diagnose: ${step}` : 'Running diagnostics…'
+    }
     if (!busy) return ''
     const lv = streamRef.current
     if (lv.tools.some((t) => t.output === undefined)) return 'Running tools…'
@@ -1765,7 +1771,7 @@ function ChatSession({
           </div>
         )}
         <div className="thread" ref={threadRef}>
-          {busy && (
+          {(busy || diagnoseBusy) && (
             <div className="exec-banner" aria-busy="true" aria-live="polite">
               <div className="exec-progress-track">
                 <div className="exec-progress-indeterminate" />
@@ -1776,7 +1782,19 @@ function ChatSession({
               </div>
             </div>
           )}
-          {messages.length === 0 && !busy && (
+          {diagnoseBusy && diagnoseLiveSteps.length > 0 && (
+            <article className="bubble assistant diagnose-live" aria-live="polite">
+              <header>
+                <span className="who">Diagnose Error</span>
+              </header>
+              <ul className="diagnose-live-steps">
+                {diagnoseLiveSteps.map((step, i) => (
+                  <li key={`${i}-${step}`}>{step}</li>
+                ))}
+              </ul>
+            </article>
+          )}
+          {messages.length === 0 && !busy && !diagnoseBusy && (
             <div className="empty">
               <h2>Ask Brain AI anything</h2>
               <p>

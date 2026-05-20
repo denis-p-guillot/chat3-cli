@@ -91,37 +91,43 @@ export async function runDiagnoseErrorStream(
       }
     | null = null
 
+  const consumeEventBlock = (rawEvent: string) => {
+    for (const ln of rawEvent.split('\n')) {
+      if (!ln.startsWith('data: ')) continue
+      const payload = ln.slice(6).trim()
+      if (!payload) continue
+      let ev: DiagnoseStreamEvent
+      try {
+        ev = JSON.parse(payload) as DiagnoseStreamEvent
+      } catch {
+        continue
+      }
+      if (ev.type === 'activity') {
+        handlers.onActivity?.(ev.step)
+      } else if (ev.type === 'result') {
+        finalResult = ev.result
+        handlers.onResult?.(ev.result)
+      } else if (ev.type === 'error') {
+        throw new Error(ev.message || 'Diagnose stream failed.')
+      }
+    }
+  }
+
   while (true) {
     const { value, done } = await reader.read()
-    if (done) break
-    buf += decoder.decode(value, { stream: true })
+    if (value) buf += decoder.decode(value, { stream: true })
     let split = buf.indexOf('\n\n')
     while (split >= 0) {
       const rawEvent = buf.slice(0, split)
       buf = buf.slice(split + 2)
       split = buf.indexOf('\n\n')
-      const lines = rawEvent.split('\n')
-      for (const ln of lines) {
-        if (!ln.startsWith('data: ')) continue
-        const payload = ln.slice(6).trim()
-        if (!payload) continue
-        let ev: DiagnoseStreamEvent
-        try {
-          ev = JSON.parse(payload) as DiagnoseStreamEvent
-        } catch {
-          continue
-        }
-        if (ev.type === 'activity') {
-          handlers.onActivity?.(ev.step)
-        } else if (ev.type === 'result') {
-          finalResult = ev.result
-          handlers.onResult?.(ev.result)
-        } else if (ev.type === 'error') {
-          throw new Error(ev.message || 'Diagnose stream failed.')
-        }
-      }
+      consumeEventBlock(rawEvent)
     }
+    if (done) break
   }
+
+  const tail = buf.trim()
+  if (tail) consumeEventBlock(tail)
 
   if (!finalResult) throw new Error('Diagnose stream ended without final result.')
   return finalResult
