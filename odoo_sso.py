@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 import secrets
 import sqlite3
-import urllib.error
+import time
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from chat3 import BASE_DIR
 
 DB_PATH = BASE_DIR / "data" / "chat3.db"
 STATE_TTL = timedelta(minutes=10)
-RETURN_PATH = "/purplecloud/brain/sso/return"
 
 
 def public_base_url(fallback: str | None = None) -> str:
@@ -31,6 +31,40 @@ def public_base_url(fallback: str | None = None) -> str:
 
 def odoo_sso_shared_secret() -> str:
     return os.getenv("ODOO_SSO_SHARED_SECRET", "").strip()
+
+
+def sign_sso_payload(payload_b64: str, *, secret: str | None = None) -> str:
+    key = (secret or odoo_sso_shared_secret()).encode("utf-8")
+    return hmac.new(key, payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def parse_signed_sso_payload(*, payload_b64: str, sig: str, expected_state: str) -> dict[str, str]:
+    secret = odoo_sso_shared_secret()
+    if not secret:
+        raise ValueError("Brain AI SSO is not configured.")
+    expected_sig = sign_sso_payload(payload_b64, secret=secret)
+    if not secrets.compare_digest(sig, expected_sig):
+        raise ValueError("Invalid Odoo SSO signature.")
+
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Invalid Odoo SSO payload.") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Invalid Odoo SSO payload.")
+
+    if str(data.get("state") or "") != expected_state:
+        raise ValueError("SSO state mismatch.")
+    exp = int(data.get("exp") or 0)
+    if exp < int(time.time()):
+        raise ValueError("SSO payload expired.")
+
+    login = str(data.get("login") or "").strip()
+    api_key = str(data.get("api_key") or "").strip()
+    if not login or not api_key:
+        raise ValueError("Odoo SSO payload is missing credentials.")
+    return {"login": login, "api_key": api_key}
 
 
 def _connect() -> sqlite3.Connection:
@@ -126,49 +160,11 @@ def pop_sso_state(state: str) -> OdooSsoState | None:
 
 
 def build_odoo_login_url(*, odoo_url: str, odoo_db: str | None, state: str) -> str:
-    redirect_path = RETURN_PATH
-    if state:
-        redirect_path = f"{RETURN_PATH}?state={urllib.parse.quote(state, safe='')}"
-    params: dict[str, str] = {"redirect": redirect_path}
+    base = odoo_url.rstrip("/")
+    # Finish on /web/login so Website does not swallow a custom /web/... path.
+    finish_url = f"{base}/web/login?brain_sso_state={urllib.parse.quote(state, safe='')}"
+    params: dict[str, str] = {"redirect": finish_url}
     if odoo_db:
         params["db"] = odoo_db
     query = urllib.parse.urlencode(params)
-    return f"{odoo_url.rstrip('/')}/web/login?{query}"
-
-
-def _jsonrpc(url: str, path: str, params: dict[str, Any]) -> Any:
-    payload = {"jsonrpc": "2.0", "method": "call", "params": params, "id": 1}
-    req = urllib.request.Request(
-        url=f"{url.rstrip('/')}{path}",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Odoo HTTP {exc.code}: {detail[:400]}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Could not reach Odoo at {url}: {exc.reason}") from exc
-    if body.get("error"):
-        err = body["error"]
-        message = err.get("data", {}).get("message") or err.get("message") or str(err)
-        raise RuntimeError(message)
-    return body.get("result")
-
-
-def exchange_odoo_sso_code(*, odoo_url: str, code: str, secret: str) -> dict[str, str]:
-    result = _jsonrpc(
-        odoo_url,
-        "/purplecloud/brain/sso/exchange",
-        {"code": code, "secret": secret},
-    )
-    if not isinstance(result, dict):
-        raise RuntimeError("Unexpected Odoo SSO exchange response.")
-    login = str(result.get("login") or "").strip()
-    api_key = str(result.get("api_key") or "").strip()
-    if not login or not api_key:
-        raise RuntimeError("Odoo did not return login credentials.")
-    return {"login": login, "api_key": api_key}
+    return f"{base}/web/login?{query}"

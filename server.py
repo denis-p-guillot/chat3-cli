@@ -60,9 +60,9 @@ from pydantic import BaseModel, Field, model_validator
 from odoo_sso import (
     build_odoo_login_url,
     create_sso_state,
-    exchange_odoo_sso_code,
     init_odoo_sso_db,
     odoo_sso_shared_secret,
+    parse_signed_sso_payload,
     pop_sso_state,
 )
 from plantuml_codec import plantuml_encode
@@ -467,11 +467,11 @@ def odoo_sso_start(body: OdooSsoStartBody, user: UserRow = Depends(get_current_u
 
 @app.get("/api/odoo/sso/callback")
 def odoo_sso_callback(
-    code: str = Query(..., min_length=8),
     state: str = Query(..., min_length=8),
+    payload: str = Query(..., min_length=16),
+    sig: str = Query(..., min_length=16),
 ) -> Response:
-    secret = odoo_sso_shared_secret()
-    if not secret:
+    if not odoo_sso_shared_secret():
         return Response(
             content=_odoo_sso_callback_html(ok=False, message="Brain AI SSO is not configured."),
             media_type="text/html",
@@ -485,7 +485,7 @@ def odoo_sso_callback(
             status_code=400,
         )
     try:
-        creds = exchange_odoo_sso_code(odoo_url=pending.odoo_url, code=code, secret=secret)
+        creds = parse_signed_sso_payload(payload_b64=payload, sig=sig, expected_state=state)
         complete_odoo_sso_for_user(
             pending.user_id,
             odoo_url=pending.odoo_url,
@@ -497,7 +497,10 @@ def odoo_sso_callback(
         return Response(
             content=_odoo_sso_callback_html(
                 ok=False,
-                message=f"Odoo SSO failed: {exc}. Install the purplecloud_brain_sso module on Odoo and configure the shared secret.",
+                message=(
+                    f"Odoo SSO failed: {exc}. "
+                    "Upgrade purplecloud_brain_sso to 19.0.1.0.2 on Odoo and confirm the shared secret matches Brain AI."
+                ),
             ),
             media_type="text/html",
             status_code=502,

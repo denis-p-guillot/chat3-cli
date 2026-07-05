@@ -428,6 +428,14 @@ function SettingsModal({
   const [ssoBusy, setSsoBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const ssoTabWatchRef = useRef<number | null>(null)
+
+  const clearSsoTabWatch = () => {
+    if (ssoTabWatchRef.current !== null) {
+      window.clearInterval(ssoTabWatchRef.current)
+      ssoTabWatchRef.current = null
+    }
+  }
 
   useEffect(() => {
     void getSettings().then((s) => {
@@ -448,6 +456,7 @@ function SettingsModal({
       if (event.origin !== window.location.origin) return
       const data = event.data as { type?: string; ok?: boolean; message?: string; login?: string }
       if (data?.type !== 'odoo-sso') return
+      clearSsoTabWatch()
       setSsoBusy(false)
       if (data.ok) {
         void getSettings().then((s) => {
@@ -464,21 +473,31 @@ function SettingsModal({
       }
     }
     window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
+    return () => {
+      window.removeEventListener('message', onMessage)
+      clearSsoTabWatch()
+    }
   }, [])
 
   async function connectOdooSso() {
     setErr(null)
     setSsoBusy(true)
+    clearSsoTabWatch()
     try {
       const { authorize_url: authorizeUrl } = await startOdooSso({
         odoo_url: odooUrl.trim(),
         odoo_db: odooDb.trim() || undefined,
       })
-      const popup = window.open(authorizeUrl, 'odoo-sso', 'width=520,height=720')
-      if (!popup) {
-        throw new Error('Popup blocked. Allow popups for this site and try again.')
+      const tab = window.open(authorizeUrl, '_blank')
+      if (!tab) {
+        throw new Error('Could not open a new tab. Allow pop-ups for this site and try again.')
       }
+      ssoTabWatchRef.current = window.setInterval(() => {
+        if (tab.closed) {
+          clearSsoTabWatch()
+          setSsoBusy(false)
+        }
+      }, 400)
     } catch (e) {
       setSsoBusy(false)
       setErr(e instanceof Error ? e.message : String(e))
@@ -593,7 +612,7 @@ function SettingsModal({
                 type="url"
                 value={odooUrl}
                 onChange={(e) => setOdooUrl(e.target.value)}
-                placeholder="https://mycompany.odoo.com"
+                placeholder="https://odoo.mycompany.com (must open /web/login)"
                 autoComplete="off"
               />
             </label>
