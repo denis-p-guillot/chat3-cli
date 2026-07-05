@@ -25,6 +25,7 @@ from user_db import (
     update_user_profile,
     user_exists,
 )
+from user_sessions import ensure_user_sessions_ready
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -170,6 +171,7 @@ def register(body: RegisterBody, response: Response) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Username already taken")
     uid = create_user(u, hash_password(body.password), body.display_name.strip())
     ensure_user_workspaces_ready(uid)
+    ensure_user_sessions_ready(uid)
     token = create_access_token(uid, u.lower())
     _set_auth_cookie(response, token)
     return {"status": "ok", "username": u.lower()}
@@ -183,6 +185,7 @@ def login(body: LoginBody, response: Response) -> dict[str, str]:
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     ensure_user_workspaces_ready(user.id)
+    ensure_user_sessions_ready(user.id)
     token = create_access_token(user.id, user.username)
     _set_auth_cookie(response, token)
     return {"status": "ok", "username": user.username}
@@ -206,6 +209,7 @@ class MeOut(BaseModel):
 @router.get("/me", response_model=MeOut)
 def me(user: UserRow = Depends(get_current_user)) -> MeOut:
     ws_id = ensure_user_workspaces_ready(user.id)
+    ensure_user_sessions_ready(user.id)
     ws = get_workspace(ws_id, user.id)
     return MeOut(
         id=user.id,

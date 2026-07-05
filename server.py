@@ -78,6 +78,7 @@ from prompt_optimization import (
 )
 from ssh_exec import run_ssh_command
 from user_crypto import decrypt_api_key, encrypt_api_key
+from user_sessions import ensure_user_sessions_ready, record_user_session, remove_workspace_session
 from user_db import (
     UserRow,
     SshConnectionRow,
@@ -446,6 +447,7 @@ class ChatHistoryPutBody(BaseModel):
 @app.get("/api/chat/history")
 def get_chat_history(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, Any]:
     user, ws_id, _ws = ctx
+    ensure_user_sessions_ready(user.id)
     path = _chat_messages_path(user.id, ws_id)
     if not path.exists():
         return {"messages": []}
@@ -466,13 +468,14 @@ def put_chat_history(
     body: ChatHistoryPutBody,
     ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
 ) -> dict[str, str]:
-    user, ws_id, _ws = ctx
+    user, ws_id, ws = ctx
     raw = json.dumps({"messages": body.messages}, ensure_ascii=False)
     if len(raw.encode("utf-8")) > MAX_CHAT_JSON_BYTES:
         raise HTTPException(status_code=400, detail="Chat history payload is too large.")
     path = _chat_messages_path(user.id, ws_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(raw, encoding="utf-8")
+    record_user_session(user.id, ws_id, ws.name if ws else f"Workspace {ws_id}", body.messages)
     return {"status": "ok"}
 
 
@@ -1903,6 +1906,8 @@ def workspaces_delete(workspace_id: int, user: UserRow = Depends(get_current_use
     deleted, active_id = delete_workspace(user.id, workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Workspace not found.")
+
+    remove_workspace_session(user.id, workspace_id)
 
     # Best effort filesystem cleanup for that workspace subtree.
     if ws_root.exists():
