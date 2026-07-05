@@ -23,6 +23,8 @@ class UserRow:
     odoo_url: str | None
     odoo_login: str | None
     odoo_password_encrypted: str | None
+    odoo_db: str | None
+    odoo_auth_mode: str | None
 
 
 @dataclass
@@ -87,6 +89,10 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN odoo_login TEXT")
     if "odoo_password_encrypted" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN odoo_password_encrypted TEXT")
+    if "odoo_db" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN odoo_db TEXT")
+    if "odoo_auth_mode" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN odoo_auth_mode TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ssh_connections (
@@ -401,6 +407,8 @@ def _user_row_from_row(row: sqlite3.Row) -> UserRow:
         odoo_url=row["odoo_url"],
         odoo_login=row["odoo_login"],
         odoo_password_encrypted=row["odoo_password_encrypted"],
+        odoo_db=row["odoo_db"],
+        odoo_auth_mode=row["odoo_auth_mode"],
     )
 
 
@@ -423,7 +431,7 @@ def get_user_by_username(username: str) -> UserRow | None:
         cur = conn.execute(
             """
             SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id, llm_model,
-                   odoo_url, odoo_login, odoo_password_encrypted
+                   odoo_url, odoo_login, odoo_password_encrypted, odoo_db, odoo_auth_mode
             FROM users WHERE username = ?
             """,
             (username.strip().lower(),),
@@ -442,7 +450,7 @@ def get_user_by_id(user_id: int) -> UserRow | None:
         cur = conn.execute(
             """
             SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id, llm_model,
-                   odoo_url, odoo_login, odoo_password_encrypted
+                   odoo_url, odoo_login, odoo_password_encrypted, odoo_db, odoo_auth_mode
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -497,19 +505,23 @@ def update_user_odoo(
     url: str | None,
     login: str | None,
     password_encrypted: str | None,
+    db: str | None = None,
+    auth_mode: str | None = None,
 ) -> None:
     conn = _connect()
     try:
         conn.execute(
             """
             UPDATE users
-            SET odoo_url = ?, odoo_login = ?, odoo_password_encrypted = ?
+            SET odoo_url = ?, odoo_login = ?, odoo_password_encrypted = ?, odoo_db = ?, odoo_auth_mode = ?
             WHERE id = ?
             """,
             (
                 url.strip() if url else None,
                 login.strip() if login else None,
                 password_encrypted,
+                db.strip() if db else None,
+                auth_mode.strip() if auth_mode else None,
                 user_id,
             ),
         )

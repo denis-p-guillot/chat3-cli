@@ -2113,6 +2113,16 @@
   color: var(--muted);
 }
 
+.settings-section-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-section-actions .odoo-sso-btn {
+  width: 100%;
+}
+
 .modal-card h2 {
   margin: 0 0 1rem;
   font-size: 1.15rem;

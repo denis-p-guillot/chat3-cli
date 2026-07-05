@@ -132,6 +132,7 @@ class SettingsBody(BaseModel):
     odoo_url: str | None = Field(default=None, max_length=500)
     odoo_login: str | None = Field(default=None, max_length=254)
     odoo_password: str | None = Field(default=None, max_length=500)
+    odoo_db: str | None = Field(default=None, max_length=128)
 
 
 # Legacy username (no @): letters, digits, . _ -
@@ -244,6 +245,8 @@ class SettingsOut(BaseModel):
     available_models: list[str]
     odoo_url: str
     odoo_login: str
+    odoo_db: str
+    odoo_auth_mode: str
     has_odoo_password: bool
 
 
@@ -255,7 +258,27 @@ def _settings_out(user: UserRow) -> SettingsOut:
         available_models=list(available_models()),
         odoo_url=user.odoo_url or "",
         odoo_login=user.odoo_login or "",
+        odoo_db=user.odoo_db or "",
+        odoo_auth_mode=user.odoo_auth_mode or "",
         has_odoo_password=bool(user.odoo_password_encrypted),
+    )
+
+
+def complete_odoo_sso_for_user(
+    user_id: int,
+    *,
+    odoo_url: str,
+    odoo_db: str | None,
+    login: str,
+    api_key: str,
+) -> None:
+    update_user_odoo(
+        user_id,
+        url=odoo_url,
+        login=login,
+        password_encrypted=encrypt_api_key(api_key),
+        db=odoo_db,
+        auth_mode="sso",
     )
 
 
@@ -284,25 +307,38 @@ def put_settings(body: SettingsBody, user: UserRow = Depends(get_current_user)) 
                 detail=f"Unknown model. Choose one of: {', '.join(available_models())}",
             )
         update_user_llm_model(user.id, model)
-    if body.odoo_url is not None or body.odoo_login is not None or body.odoo_password is not None:
+    if body.odoo_url is not None or body.odoo_login is not None or body.odoo_password is not None or body.odoo_db is not None:
         url = user.odoo_url or ""
         login = user.odoo_login or ""
+        db = user.odoo_db or ""
+        auth_mode = user.odoo_auth_mode or ""
         password_encrypted = user.odoo_password_encrypted
         if body.odoo_url is not None:
             url = body.odoo_url.strip()
         if body.odoo_login is not None:
             login = body.odoo_login.strip()
+        if body.odoo_db is not None:
+            db = body.odoo_db.strip()
         if body.odoo_password is not None:
             pwd = body.odoo_password.strip()
             if pwd:
                 password_encrypted = encrypt_api_key(pwd)
+                auth_mode = "password"
             else:
                 password_encrypted = None
+                auth_mode = ""
+        if not url and not login and not password_encrypted:
+            db = ""
+            auth_mode = ""
+        elif body.odoo_password is None and password_encrypted and auth_mode != "sso":
+            auth_mode = auth_mode or "password"
         update_user_odoo(
             user.id,
             url=url or None,
             login=login or None,
             password_encrypted=password_encrypted,
+            db=db or None,
+            auth_mode=auth_mode or None,
         )
     fresh = get_user_by_id(user.id)
     assert fresh is not None

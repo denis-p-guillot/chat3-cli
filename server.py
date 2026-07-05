@@ -50,16 +50,24 @@ def _bootstrap_secret_key() -> None:
 
 _bootstrap_secret_key()
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from pydantic import BaseModel, Field, model_validator
 
+from odoo_sso import (
+    build_odoo_login_url,
+    create_sso_state,
+    exchange_odoo_sso_code,
+    init_odoo_sso_db,
+    odoo_sso_shared_secret,
+    pop_sso_state,
+)
 from plantuml_codec import plantuml_encode
 
-from auth_api import get_current_user, get_openai_key_for_user, router as auth_router
+from auth_api import complete_odoo_sso_for_user, get_current_user, get_openai_key_for_user, router as auth_router
 from chat3 import (
     BASE_DIR,
     WORKSPACE_DIR,
@@ -100,6 +108,7 @@ from user_db import (
     set_ssh_connection_workspaces,
     share_ssh_connection,
     unshare_ssh_connection,
+    update_user_odoo,
     upsert_ssh_connection,
 )
 
@@ -398,7 +407,109 @@ class ChatBody(BaseModel):
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    init_odoo_sso_db()
     ensure_dirs()
+
+
+class OdooSsoStartBody(BaseModel):
+    odoo_url: str | None = Field(default=None, max_length=500)
+    odoo_db: str | None = Field(default=None, max_length=128)
+
+
+def _odoo_sso_callback_html(*, ok: bool, message: str, login: str = "") -> str:
+    payload = json.dumps(
+        {"type": "odoo-sso", "ok": ok, "message": message, "login": login},
+        ensure_ascii=False,
+    )
+    safe_message = html.escape(message)
+    safe_login = html.escape(login)
+    return f"""<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Odoo SSO</title></head>
+<body>
+<p>{safe_message}</p>
+<script>
+  const payload = {payload};
+  if (window.opener) {{
+    window.opener.postMessage(payload, window.location.origin);
+  }}
+  window.setTimeout(() => window.close(), 400);
+</script>
+</body>
+</html>"""
+
+
+@app.post("/api/odoo/sso/start")
+def odoo_sso_start(body: OdooSsoStartBody, user: UserRow = Depends(get_current_user)) -> dict[str, str]:
+    if not odoo_sso_shared_secret():
+        raise HTTPException(
+            status_code=503,
+            detail="ODOO_SSO_SHARED_SECRET is not configured on the Brain AI server.",
+        )
+    odoo_url = (body.odoo_url or user.odoo_url or "").strip().rstrip("/")
+    if not odoo_url:
+        raise HTTPException(status_code=400, detail="Enter your Odoo URL before starting SSO.")
+    odoo_db = (body.odoo_db or user.odoo_db or "").strip() or None
+    update_user_odoo(
+        user.id,
+        url=odoo_url,
+        login=user.odoo_login,
+        password_encrypted=user.odoo_password_encrypted,
+        db=odoo_db,
+        auth_mode=user.odoo_auth_mode,
+    )
+    state = create_sso_state(user_id=user.id, odoo_url=odoo_url, odoo_db=odoo_db)
+    return {
+        "authorize_url": build_odoo_login_url(odoo_url=odoo_url, odoo_db=odoo_db, state=state),
+        "state": state,
+    }
+
+
+@app.get("/api/odoo/sso/callback")
+def odoo_sso_callback(
+    code: str = Query(..., min_length=8),
+    state: str = Query(..., min_length=8),
+) -> Response:
+    secret = odoo_sso_shared_secret()
+    if not secret:
+        return Response(
+            content=_odoo_sso_callback_html(ok=False, message="Brain AI SSO is not configured."),
+            media_type="text/html",
+            status_code=503,
+        )
+    pending = pop_sso_state(state)
+    if not pending:
+        return Response(
+            content=_odoo_sso_callback_html(ok=False, message="SSO session expired. Try again from Settings."),
+            media_type="text/html",
+            status_code=400,
+        )
+    try:
+        creds = exchange_odoo_sso_code(odoo_url=pending.odoo_url, code=code, secret=secret)
+        complete_odoo_sso_for_user(
+            pending.user_id,
+            odoo_url=pending.odoo_url,
+            odoo_db=pending.odoo_db,
+            login=creds["login"],
+            api_key=creds["api_key"],
+        )
+    except Exception as exc:
+        return Response(
+            content=_odoo_sso_callback_html(
+                ok=False,
+                message=f"Odoo SSO failed: {exc}. Install the purplecloud_brain_sso module on Odoo and configure the shared secret.",
+            ),
+            media_type="text/html",
+            status_code=502,
+        )
+    return Response(
+        content=_odoo_sso_callback_html(
+            ok=True,
+            message=f"Connected to Odoo as {creds['login']}.",
+            login=creds["login"],
+        ),
+        media_type="text/html",
+    )
 
 
 @app.get("/api/health")

@@ -14,6 +14,8 @@ export type Settings = {
   available_models: string[]
   odoo_url: string
   odoo_login: string
+  odoo_db: string
+  odoo_auth_mode: string
   has_odoo_password: boolean
 }
 
@@ -79,6 +81,7 @@ export async function putSettings(body: {
   odoo_url?: string
   odoo_login?: string
   odoo_password?: string
+  odoo_db?: string
 }): Promise<Settings> {
   const res = await fetch('/api/auth/settings', {
     method: 'PUT',
@@ -88,4 +91,18 @@ export async function putSettings(body: {
   })
   if (!res.ok) throw new Error(await parseError(res))
   return res.json() as Promise<Settings>
+}
+
+export async function startOdooSso(body: { odoo_url?: string; odoo_db?: string } = {}): Promise<{
+  authorize_url: string
+  state: string
+}> {
+  const res = await fetch('/api/odoo/sso/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json() as Promise<{ authorize_url: string; state: string }>
 }

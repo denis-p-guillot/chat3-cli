@@ -1,0 +1,2 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_purplecloud_brain_sso_code,purplecloud.brain.sso.code,model_purplecloud_brain_sso_code,base.group_system,1,1,1,1

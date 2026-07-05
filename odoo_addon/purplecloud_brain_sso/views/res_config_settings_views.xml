@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_config_settings_view_form" model="ir.ui.view">
+        <field name="name">res.config.settings.view.form.inherit.purplecloud.brain.sso</field>
+        <field name="model">res.config.settings</field>
+        <field name="inherit_id" ref="base_setup.res_config_settings_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//block[@name='integration']" position="inside">
+                <setting string="PurpleCloud Brain AI" help="Allow PurpleCloud Brain AI to receive Odoo SSO credentials after login.">
+                    <div class="content-group">
+                        <div class="row mt16">
+                            <label for="purplecloud_brain_public_url" class="col-lg-3 o_light_label"/>
+                            <field name="purplecloud_brain_public_url" placeholder="https://brain.example.com"/>
+                        </div>
+                        <div class="row">
+                            <label for="purplecloud_brain_shared_secret" class="col-lg-3 o_light_label"/>
+                            <field name="purplecloud_brain_shared_secret" password="True"/>
+                        </div>
+                    </div>
+                </setting>
+            </xpath>
+        </field>
+    </record>
+</odoo>

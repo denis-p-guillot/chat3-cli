@@ -17,6 +17,7 @@ import {
   logout,
   putSettings,
   register,
+  startOdooSso,
   type Me,
   type Settings,
 } from './lib/auth'
@@ -419,9 +420,12 @@ function SettingsModal({
   const [displayName, setDisplayName] = useState(me.display_name)
   const [apiKey, setApiKey] = useState('')
   const [odooUrl, setOdooUrl] = useState('')
+  const [odooDb, setOdooDb] = useState('')
   const [odooLogin, setOdooLogin] = useState('')
   const [odooPassword, setOdooPassword] = useState('')
+  const [odooAuthMode, setOdooAuthMode] = useState('')
   const [hasOdooPassword, setHasOdooPassword] = useState(false)
+  const [ssoBusy, setSsoBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -429,13 +433,57 @@ function SettingsModal({
     void getSettings().then((s) => {
       setDisplayName(s.display_name)
       setOdooUrl(s.odoo_url)
+      setOdooDb(s.odoo_db)
       setOdooLogin(s.odoo_login)
+      setOdooAuthMode(s.odoo_auth_mode)
       setHasOdooPassword(s.has_odoo_password)
     })
     setApiKey('')
     setOdooPassword('')
     setErr(null)
   }, [me.id])
+
+  useEffect(() => {
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== window.location.origin) return
+      const data = event.data as { type?: string; ok?: boolean; message?: string; login?: string }
+      if (data?.type !== 'odoo-sso') return
+      setSsoBusy(false)
+      if (data.ok) {
+        void getSettings().then((s) => {
+          setOdooUrl(s.odoo_url)
+          setOdooDb(s.odoo_db)
+          setOdooLogin(s.odoo_login)
+          setOdooAuthMode(s.odoo_auth_mode)
+          setHasOdooPassword(s.has_odoo_password)
+          setOdooPassword('')
+        })
+        setErr(null)
+      } else {
+        setErr(typeof data.message === 'string' ? data.message : 'Odoo SSO failed.')
+      }
+    }
+    window.addEventListener('message', onMessage)
+    return () => window.removeEventListener('message', onMessage)
+  }, [])
+
+  async function connectOdooSso() {
+    setErr(null)
+    setSsoBusy(true)
+    try {
+      const { authorize_url: authorizeUrl } = await startOdooSso({
+        odoo_url: odooUrl.trim(),
+        odoo_db: odooDb.trim() || undefined,
+      })
+      const popup = window.open(authorizeUrl, 'odoo-sso', 'width=520,height=720')
+      if (!popup) {
+        throw new Error('Popup blocked. Allow popups for this site and try again.')
+      }
+    } catch (e) {
+      setSsoBusy(false)
+      setErr(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
@@ -447,16 +495,19 @@ function SettingsModal({
         openai_api_key?: string
         odoo_url: string
         odoo_login: string
+        odoo_db: string
         odoo_password?: string
       } = {
         display_name: displayName,
         odoo_url: odooUrl.trim(),
         odoo_login: odooLogin.trim(),
+        odoo_db: odooDb.trim(),
       }
       if (apiKey.trim()) body.openai_api_key = apiKey.trim()
       if (odooPassword.trim()) body.odoo_password = odooPassword.trim()
       const s = await putSettings(body)
       setHasOdooPassword(s.has_odoo_password)
+      setOdooAuthMode(s.odoo_auth_mode)
       setOdooPassword('')
       onSaved(s)
     } catch (e) {
@@ -484,10 +535,12 @@ function SettingsModal({
     setErr(null)
     setBusy(true)
     try {
-      const s = await putSettings({ odoo_url: '', odoo_login: '', odoo_password: '' })
+      const s = await putSettings({ odoo_url: '', odoo_login: '', odoo_password: '', odoo_db: '' })
       setOdooUrl('')
+      setOdooDb('')
       setOdooLogin('')
       setOdooPassword('')
+      setOdooAuthMode('')
       setHasOdooPassword(false)
       onSaved(s)
     } catch (e) {
@@ -545,12 +598,35 @@ function SettingsModal({
               />
             </label>
             <label>
+              Database
+              <input
+                value={odooDb}
+                onChange={(e) => setOdooDb(e.target.value)}
+                placeholder="mycompany (optional)"
+                autoComplete="off"
+              />
+            </label>
+            <div className="settings-section-actions">
+              <button
+                type="button"
+                className="btn secondary odoo-sso-btn"
+                disabled={busy || ssoBusy || !odooUrl.trim()}
+                onClick={() => void connectOdooSso()}
+              >
+                {ssoBusy ? 'Waiting for Odoo…' : 'Connect with Odoo SSO'}
+              </button>
+              {odooAuthMode === 'sso' && odooLogin && (
+                <p className="hint">Connected via SSO as {odooLogin}</p>
+              )}
+            </div>
+            <label>
               Login
               <input
                 value={odooLogin}
                 onChange={(e) => setOdooLogin(e.target.value)}
                 placeholder="admin@example.com"
                 autoComplete="username"
+                readOnly={odooAuthMode === 'sso'}
               />
             </label>
             <label>
@@ -559,8 +635,15 @@ function SettingsModal({
                 type="password"
                 value={odooPassword}
                 onChange={(e) => setOdooPassword(e.target.value)}
-                placeholder={hasOdooPassword ? 'Leave blank to keep current password' : '••••••••'}
+                placeholder={
+                  odooAuthMode === 'sso'
+                    ? 'Stored via SSO API key'
+                    : hasOdooPassword
+                      ? 'Leave blank to keep current password'
+                      : '••••••••'
+                }
                 autoComplete="new-password"
+                disabled={odooAuthMode === 'sso'}
               />
             </label>
           </fieldset>
