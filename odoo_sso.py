@@ -18,6 +18,7 @@ from chat3 import BASE_DIR
 
 DB_PATH = BASE_DIR / "data" / "chat3.db"
 STATE_TTL = timedelta(minutes=10)
+SSO_COMPLETE_PATH = "/web/brain_ai/sso/complete"
 
 
 def public_base_url(fallback: str | None = None) -> str:
@@ -161,8 +162,9 @@ def pop_sso_state(state: str) -> OdooSsoState | None:
 
 def build_odoo_login_url(*, odoo_url: str, odoo_db: str | None, state: str) -> str:
     base = odoo_url.rstrip("/")
-    # Finish on /web/login so Website does not swallow a custom /web/... path.
-    finish_url = f"{base}/web/login?brain_sso_state={urllib.parse.quote(state, safe='')}"
+    finish_url = (
+        f"{base}{SSO_COMPLETE_PATH}?brain_sso_state={urllib.parse.quote(state, safe='')}"
+    )
     params: dict[str, str] = {"redirect": finish_url}
     if odoo_db:
         params["db"] = odoo_db

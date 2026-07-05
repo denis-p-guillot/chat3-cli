@@ -1,6 +1,6 @@
 {
     "name": "PurpleCloud Brain SSO",
-    "version": "19.0.1.0.3",
+    "version": "19.0.1.0.4",
     "category": "Hidden",
     "summary": "Hand off Odoo SSO login to PurpleCloud Brain AI",
     "depends": ["base", "web"],

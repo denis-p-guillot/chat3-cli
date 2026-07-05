@@ -93,6 +93,18 @@ _RETURN_ROUTES = (
 
 
 class PurplecloudBrainSsoController(PurplecloudBrainSsoService):
+    @http.route(
+        "/web/brain_ai/sso/complete",
+        type="http",
+        auth="user",
+        website=False,
+        sitemap=False,
+    )
+    def sso_complete(self, brain_sso_state=None, **kw):
+        if not brain_sso_state:
+            return request.redirect("/web/login")
+        return self.issue_brain_redirect(state=brain_sso_state)
+
     @http.route(_RETURN_ROUTES, type="http", auth="user", website=False, sitemap=False)
     def sso_return(self, state=None, **kw):
         return self.issue_brain_redirect(state=state)
