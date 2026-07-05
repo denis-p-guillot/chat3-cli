@@ -62,12 +62,13 @@ from plantuml_codec import plantuml_encode
 from auth_api import get_current_user, get_openai_key_for_user, router as auth_router
 from chat3 import (
     BASE_DIR,
-    MODEL,
     WORKSPACE_DIR,
+    available_models,
     ensure_dirs,
     ensure_named_workspace_layout,
     iter_agent_turn,
     named_workspace_root,
+    resolve_user_model,
     workspace_session,
 )
 from local_file_analysis import MAX_ANALYSIS_READ_BYTES, analyze_workspace_file
@@ -103,6 +104,9 @@ from user_db import (
 )
 
 app = FastAPI(title="PurpleCloud Brain AI", version="1.0.0")
+
+APP_VERSION = "0.6"
+_SERVER_BOOT_ID = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 app.add_middleware(
     CORSMiddleware,
@@ -402,12 +406,46 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _read_ui_version_file() -> dict[str, Any]:
+    for rel in ("web/dist/version.json", "web/public/version.json"):
+        path = BASE_DIR / rel
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+@app.get("/api/version")
+def app_version() -> Response:
+    """Public build identity used by the UI auto-update watcher."""
+    ui = _read_ui_version_file()
+    build_id = str(ui.get("build_id") or _SERVER_BOOT_ID)
+    payload = {
+        "app_version": str(ui.get("app_version") or APP_VERSION),
+        "build_id": build_id,
+        "server_boot_id": _SERVER_BOOT_ID,
+        "agent_id": f"{build_id}|{_SERVER_BOOT_ID}",
+        "built_at": ui.get("built_at"),
+    }
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
 @app.get("/api/meta")
-def meta(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, str]:
+def meta(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, Any]:
     user, ws_id, ws = ctx
     root = ensure_named_workspace_layout(user.id, ws_id)
     return {
-        "model": MODEL,
+        "model": resolve_user_model(user.llm_model),
+        "available_models": list(available_models()),
         "workspace": str(WORKSPACE_DIR),
         "base_dir": str(BASE_DIR),
         "user_workspace": f"users/{user.id}/w/{ws_id}",
@@ -499,6 +537,7 @@ async def chat_stream(
             detail="No OpenAI API key configured for your account. Add your key in Settings.",
         )
     client = OpenAI(api_key=key)
+    active_model = resolve_user_model(user.llm_model)
 
     # Starlette runs *sync* StreamingResponse iterators in a thread pool; successive next() calls
     # can use different threads, so ContextVar tokens from workspace_session() break on exit.
@@ -517,7 +556,7 @@ async def chat_stream(
                         q.put(f"data: {json.dumps({'type': 'done'})}\n\n".encode("utf-8"))
                         return
                     try:
-                        for ev in iter_agent_turn(client, history):
+                        for ev in iter_agent_turn(client, history, model=active_model):
                             q.put(
                                 f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode("utf-8")
                             )
@@ -1992,6 +2031,15 @@ def workspaces_delete(workspace_id: int, user: UserRow = Depends(get_current_use
 
 _web_dist = BASE_DIR / "web" / "dist"
 if _web_dist.is_dir():
+
+    @app.get("/")
+    def spa_index() -> FileResponse:
+        return FileResponse(
+            path=str(_web_dist / "index.html"),
+            media_type="text/html",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+
     app.mount(
         "/",
         StaticFiles(directory=str(_web_dist), html=True),

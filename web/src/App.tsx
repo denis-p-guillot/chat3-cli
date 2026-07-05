@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { APP_VERSION } from './lib/appVersion'
 import { ChatMarkdown } from './components/ChatMarkdown'
 import {
   MAX_ATTACHMENTS,
@@ -94,6 +95,7 @@ type ChatMsg =
 
 type Meta = {
   model: string
+  available_models?: string[]
   workspace: string
   base_dir: string
   user_workspace?: string
@@ -416,14 +418,22 @@ function SettingsModal({
 }) {
   const [displayName, setDisplayName] = useState(me.display_name)
   const [apiKey, setApiKey] = useState('')
+  const [odooUrl, setOdooUrl] = useState('')
+  const [odooLogin, setOdooLogin] = useState('')
+  const [odooPassword, setOdooPassword] = useState('')
+  const [hasOdooPassword, setHasOdooPassword] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
   useEffect(() => {
     void getSettings().then((s) => {
       setDisplayName(s.display_name)
+      setOdooUrl(s.odoo_url)
+      setOdooLogin(s.odoo_login)
+      setHasOdooPassword(s.has_odoo_password)
     })
     setApiKey('')
+    setOdooPassword('')
     setErr(null)
   }, [me.id])
 
@@ -432,9 +442,22 @@ function SettingsModal({
     setErr(null)
     setBusy(true)
     try {
-      const body: { display_name: string; openai_api_key?: string } = { display_name: displayName }
+      const body: {
+        display_name: string
+        openai_api_key?: string
+        odoo_url: string
+        odoo_login: string
+        odoo_password?: string
+      } = {
+        display_name: displayName,
+        odoo_url: odooUrl.trim(),
+        odoo_login: odooLogin.trim(),
+      }
       if (apiKey.trim()) body.openai_api_key = apiKey.trim()
+      if (odooPassword.trim()) body.odoo_password = odooPassword.trim()
       const s = await putSettings(body)
+      setHasOdooPassword(s.has_odoo_password)
+      setOdooPassword('')
       onSaved(s)
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e))
@@ -457,6 +480,25 @@ function SettingsModal({
     }
   }
 
+  async function clearOdoo() {
+    setErr(null)
+    setBusy(true)
+    try {
+      const s = await putSettings({ odoo_url: '', odoo_login: '', odoo_password: '' })
+      setOdooUrl('')
+      setOdooLogin('')
+      setOdooPassword('')
+      setHasOdooPassword(false)
+      onSaved(s)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const hasOdooConfigured = Boolean(odooUrl.trim() || odooLogin.trim() || hasOdooPassword)
+
   return (
     <div
       className="modal-backdrop"
@@ -468,7 +510,7 @@ function SettingsModal({
         if (e.key === 'Escape') onClose()
       }}
     >
-      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card settings-modal" onClick={(e) => e.stopPropagation()}>
         <h2 id="settings-title">Settings</h2>
         <form className="auth-form" onSubmit={(e) => void save(e)}>
           <label>
@@ -489,6 +531,40 @@ function SettingsModal({
               autoComplete="off"
             />
           </label>
+
+          <fieldset className="settings-section">
+            <legend>Odoo</legend>
+            <label>
+              URL
+              <input
+                type="url"
+                value={odooUrl}
+                onChange={(e) => setOdooUrl(e.target.value)}
+                placeholder="https://mycompany.odoo.com"
+                autoComplete="off"
+              />
+            </label>
+            <label>
+              Login
+              <input
+                value={odooLogin}
+                onChange={(e) => setOdooLogin(e.target.value)}
+                placeholder="admin@example.com"
+                autoComplete="username"
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={odooPassword}
+                onChange={(e) => setOdooPassword(e.target.value)}
+                placeholder={hasOdooPassword ? 'Leave blank to keep current password' : '••••••••'}
+                autoComplete="new-password"
+              />
+            </label>
+          </fieldset>
+
           {err && <p className="warn">{err}</p>}
           <div className="modal-actions">
             <button type="button" className="btn secondary" onClick={onClose} disabled={busy}>
@@ -496,6 +572,9 @@ function SettingsModal({
             </button>
             <button type="button" className="btn secondary" onClick={() => void clearKey()} disabled={busy || !me.has_openai_key}>
               Remove key
+            </button>
+            <button type="button" className="btn secondary" onClick={() => void clearOdoo()} disabled={busy || !hasOdooConfigured}>
+              Clear Odoo
             </button>
             <button type="submit" className="btn primary" disabled={busy}>
               Save
@@ -582,6 +661,8 @@ function ChatSession({
   const [dragOver, setDragOver] = useState(false)
   const [meta, setMeta] = useState<Meta | null>(null)
   const [metaErr, setMetaErr] = useState<string | null>(null)
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelErr, setModelErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [tick, setTick] = useState(0)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -644,12 +725,33 @@ function ChatSession({
     }, 4200)
   }
 
+  const refreshMeta = async () => {
+    const r = await fetch('/api/meta', { credentials: 'include' })
+    if (!r.ok) throw new Error(r.statusText)
+    const m = (await r.json()) as Meta
+    setMeta(m)
+    setMetaErr(null)
+    return m
+  }
+
   useEffect(() => {
-    fetch('/api/meta', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
-      .then((m: Meta) => setMeta(m))
-      .catch((e: Error) => setMetaErr(e.message))
+    void refreshMeta().catch((e: Error) => setMetaErr(e.message))
   }, [me.id, me.active_workspace_id])
+
+  async function changeModel(model: string) {
+    if (!meta || model === meta.model) return
+    setModelBusy(true)
+    setModelErr(null)
+    try {
+      await putSettings({ llm_model: model })
+      await refreshMeta()
+      pushNotice(`Model switched to ${model}`, 'success')
+    } catch (e) {
+      setModelErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setModelBusy(false)
+    }
+  }
 
   useEffect(() => {
     void fetchWorkspacesList()
@@ -1542,7 +1644,7 @@ function ChatSession({
               <div className="brand-lockup">
                 <span className="brand-product">PurpleCloud</span>
                 <h1 className="brand-title">Brain AI</h1>
-                <p className="tagline">Version 0.6</p>
+                <p className="tagline">Version {APP_VERSION}</p>
               </div>
             </div>
           </div>
@@ -1701,7 +1803,14 @@ function ChatSession({
         )}
 
         {sidebarWidgets.environment && (
-          <EnvironmentWidget meta={meta} metaErr={metaErr} shortPath={shortPath} />
+          <EnvironmentWidget
+            meta={meta}
+            metaErr={metaErr}
+            modelBusy={modelBusy}
+            modelErr={modelErr}
+            shortPath={shortPath}
+            onModelChange={(model) => void changeModel(model)}
+          />
         )}
 
         {sidebarWidgets.workspaceFiles && (
@@ -1781,6 +1890,7 @@ function ChatSession({
         />
       )}
 
+      <div className="workspace-shell">
       <main className="main">
         {notices.length > 0 && (
           <div className="toast-stack" aria-live="polite">
@@ -1968,6 +2078,9 @@ function ChatSession({
           </div>
         )}
 
+      </main>
+
+      <aside className="composer-rail" aria-label="Message composer">
         <footer
           className={`composer ${dragOver ? 'composer-drop' : ''}`}
           onDragEnter={(e) => {
@@ -2046,7 +2159,7 @@ function ChatSession({
               placeholder={
                 historyHydrated ? 'Message… (Enter to send, Shift+Enter for newline)' : 'Loading saved conversation…'
               }
-              rows={3}
+              rows={6}
               disabled={busy || !historyHydrated}
               aria-label="Message"
             />
@@ -2139,7 +2252,8 @@ function ChatSession({
             </div>
           </div>
         </footer>
-      </main>
+      </aside>
+      </div>
     </div>
   )
 }

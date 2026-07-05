@@ -10,6 +10,11 @@ export type Me = {
 export type Settings = {
   display_name: string
   has_openai_key: boolean
+  llm_model: string
+  available_models: string[]
+  odoo_url: string
+  odoo_login: string
+  has_odoo_password: boolean
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -67,7 +72,14 @@ export async function getSettings(): Promise<Settings> {
   return res.json() as Promise<Settings>
 }
 
-export async function putSettings(body: { display_name?: string; openai_api_key?: string }): Promise<Settings> {
+export async function putSettings(body: {
+  display_name?: string
+  openai_api_key?: string
+  llm_model?: string
+  odoo_url?: string
+  odoo_login?: string
+  odoo_password?: string
+}): Promise<Settings> {
   const res = await fetch('/api/auth/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

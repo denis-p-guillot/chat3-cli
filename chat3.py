@@ -25,6 +25,31 @@ from rich.text import Text
 
 MODEL = "gpt-5.4"
 
+DEFAULT_AVAILABLE_MODELS = (MODEL, "gpt-4.1", "gpt-4o", "o3-mini")
+
+
+def available_models() -> tuple[str, ...]:
+    raw = os.getenv("AVAILABLE_MODELS", "").strip()
+    if raw:
+        models = tuple(dict.fromkeys(part.strip() for part in raw.split(",") if part.strip()))
+        if models:
+            return models
+    return DEFAULT_AVAILABLE_MODELS
+
+
+def default_model() -> str:
+    configured = os.getenv("DEFAULT_MODEL", MODEL).strip() or MODEL
+    models = available_models()
+    if configured in models:
+        return configured
+    return models[0]
+
+
+def resolve_user_model(user_model: str | None) -> str:
+    if user_model and user_model.strip() in available_models():
+        return user_model.strip()
+    return default_model()
+
 SYSTEM_PROMPT = """
 You are a helpful technical assistant running in a local CLI.
 
@@ -1730,12 +1755,18 @@ def call_function(name: str, args: dict[str, Any]) -> str:
     return json_result(ok=False, error=f"Unknown function: {name}")
 
 
-def iter_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
+def iter_agent_turn(
+    client: OpenAI,
+    history: list[dict[str, Any]],
+    *,
+    model: str | None = None,
+) -> Iterator[dict[str, Any]]:
+    active_model = model or default_model()
     input_items: list[Any] = build_input_messages(history)
 
     for _ in range(MAX_TOOL_ROUNDS):
         response = client.with_options(timeout=MODEL_REQUEST_TIMEOUT_SECONDS).responses.create(
-            model=MODEL,
+            model=active_model,
             instructions=SYSTEM_PROMPT,
             input=input_items,
             tools=TOOLS,
@@ -1779,9 +1810,9 @@ def iter_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> Iterator[d
     yield {"type": "assistant", "content": "_Stopped after too many tool rounds._"}
 
 
-def run_agent_turn(client: OpenAI, history: list[dict[str, Any]]) -> str:
+def run_agent_turn(client: OpenAI, history: list[dict[str, Any]], *, model: str | None = None) -> str:
     final = ""
-    for ev in iter_agent_turn(client, history):
+    for ev in iter_agent_turn(client, history, model=model):
         if ev["type"] == "tool_call":
             render_tool_call(ev["name"], ev["arguments"])
         elif ev["type"] == "tool_result":

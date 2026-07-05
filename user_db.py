@@ -19,6 +19,10 @@ class UserRow:
     display_name: str
     openai_api_key_encrypted: str | None
     active_workspace_id: int | None
+    llm_model: str | None
+    odoo_url: str | None
+    odoo_login: str | None
+    odoo_password_encrypted: str | None
 
 
 @dataclass
@@ -75,6 +79,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in cur.fetchall()}
     if "active_workspace_id" not in cols:
         conn.execute("ALTER TABLE users ADD COLUMN active_workspace_id INTEGER")
+    if "llm_model" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN llm_model TEXT")
+    if "odoo_url" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN odoo_url TEXT")
+    if "odoo_login" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN odoo_login TEXT")
+    if "odoo_password_encrypted" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN odoo_password_encrypted TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ssh_connections (
@@ -385,6 +397,10 @@ def _user_row_from_row(row: sqlite3.Row) -> UserRow:
         display_name=row["display_name"] or "",
         openai_api_key_encrypted=row["openai_api_key_encrypted"],
         active_workspace_id=row["active_workspace_id"],
+        llm_model=row["llm_model"],
+        odoo_url=row["odoo_url"],
+        odoo_login=row["odoo_login"],
+        odoo_password_encrypted=row["odoo_password_encrypted"],
     )
 
 
@@ -406,7 +422,8 @@ def get_user_by_username(username: str) -> UserRow | None:
     try:
         cur = conn.execute(
             """
-            SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id
+            SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id, llm_model,
+                   odoo_url, odoo_login, odoo_password_encrypted
             FROM users WHERE username = ?
             """,
             (username.strip().lower(),),
@@ -424,7 +441,8 @@ def get_user_by_id(user_id: int) -> UserRow | None:
     try:
         cur = conn.execute(
             """
-            SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id
+            SELECT id, username, password_hash, display_name, openai_api_key_encrypted, active_workspace_id, llm_model,
+                   odoo_url, odoo_login, odoo_password_encrypted
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -455,6 +473,45 @@ def update_user_api_key_encrypted(user_id: int, encrypted: str | None) -> None:
         conn.execute(
             "UPDATE users SET openai_api_key_encrypted = ? WHERE id = ?",
             (encrypted, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_user_llm_model(user_id: int, llm_model: str | None) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            "UPDATE users SET llm_model = ? WHERE id = ?",
+            (llm_model.strip() if llm_model else None, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_user_odoo(
+    user_id: int,
+    *,
+    url: str | None,
+    login: str | None,
+    password_encrypted: str | None,
+) -> None:
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            UPDATE users
+            SET odoo_url = ?, odoo_login = ?, odoo_password_encrypted = ?
+            WHERE id = ?
+            """,
+            (
+                url.strip() if url else None,
+                login.strip() if login else None,
+                password_encrypted,
+                user_id,
+            ),
         )
         conn.commit()
     finally:

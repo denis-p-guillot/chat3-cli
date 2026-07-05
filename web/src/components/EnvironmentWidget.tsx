@@ -1,5 +1,6 @@
 type Meta = {
   model: string
+  available_models?: string[]
   workspace: string
   base_dir: string
   user_workspace?: string
@@ -9,10 +10,22 @@ type Meta = {
 type EnvironmentWidgetProps = {
   meta: Meta | null
   metaErr: string | null
+  modelBusy: boolean
+  modelErr: string | null
   shortPath: (p: string) => string
+  onModelChange: (model: string) => void
 }
 
-export function EnvironmentWidget({ meta, metaErr, shortPath }: EnvironmentWidgetProps) {
+export function EnvironmentWidget({
+  meta,
+  metaErr,
+  modelBusy,
+  modelErr,
+  shortPath,
+  onModelChange,
+}: EnvironmentWidgetProps) {
+  const models = meta?.available_models?.length ? meta.available_models : meta ? [meta.model] : []
+
   return (
     <div className="sidebar-section sidebar-widget">
       <h2>Environment</h2>
@@ -21,7 +34,26 @@ export function EnvironmentWidget({ meta, metaErr, shortPath }: EnvironmentWidge
         <dl className="meta-list">
           <div>
             <dt>Model</dt>
-            <dd>{meta.model}</dd>
+            <dd>
+              {models.length > 0 ? (
+                <select
+                  className="workspace-select workspace-select-compact meta-model-select"
+                  value={meta.model}
+                  disabled={modelBusy || models.length <= 1}
+                  aria-label="LLM model"
+                  onChange={(e) => onModelChange(e.target.value)}
+                >
+                  {models.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                meta.model
+              )}
+            </dd>
+            {modelErr && <p className="warn">{modelErr}</p>}
           </div>
           <div>
             <dt>Workspace</dt>

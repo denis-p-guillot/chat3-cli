@@ -12,6 +12,7 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
 
+from chat3 import available_models, resolve_user_model
 from user_crypto import decrypt_api_key, encrypt_api_key
 from user_db import (
     UserRow,
@@ -22,6 +23,8 @@ from user_db import (
     get_workspace,
     init_db,
     update_user_api_key_encrypted,
+    update_user_llm_model,
+    update_user_odoo,
     update_user_profile,
     user_exists,
 )
@@ -82,6 +85,15 @@ def get_openai_key_for_user(user: UserRow) -> str | None:
         raise HTTPException(status_code=500, detail="Could not decrypt stored API key. Check SECRET_KEY.") from exc
 
 
+def get_odoo_password_for_user(user: UserRow) -> str | None:
+    if not user.odoo_password_encrypted:
+        return None
+    try:
+        return decrypt_api_key(user.odoo_password_encrypted)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail="Could not decrypt stored Odoo password. Check SECRET_KEY.") from exc
+
+
 def get_current_user(
     access_token: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header()] = None,
@@ -116,6 +128,10 @@ class LoginBody(BaseModel):
 class SettingsBody(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
     openai_api_key: str | None = Field(default=None, max_length=500)
+    llm_model: str | None = Field(default=None, max_length=128)
+    odoo_url: str | None = Field(default=None, max_length=500)
+    odoo_login: str | None = Field(default=None, max_length=254)
+    odoo_password: str | None = Field(default=None, max_length=500)
 
 
 # Legacy username (no @): letters, digits, . _ -
@@ -224,11 +240,28 @@ def me(user: UserRow = Depends(get_current_user)) -> MeOut:
 class SettingsOut(BaseModel):
     display_name: str
     has_openai_key: bool
+    llm_model: str
+    available_models: list[str]
+    odoo_url: str
+    odoo_login: str
+    has_odoo_password: bool
+
+
+def _settings_out(user: UserRow) -> SettingsOut:
+    return SettingsOut(
+        display_name=user.display_name,
+        has_openai_key=bool(user.openai_api_key_encrypted),
+        llm_model=resolve_user_model(user.llm_model),
+        available_models=list(available_models()),
+        odoo_url=user.odoo_url or "",
+        odoo_login=user.odoo_login or "",
+        has_odoo_password=bool(user.odoo_password_encrypted),
+    )
 
 
 @router.get("/settings", response_model=SettingsOut)
 def get_settings(user: UserRow = Depends(get_current_user)) -> SettingsOut:
-    return SettingsOut(display_name=user.display_name, has_openai_key=bool(user.openai_api_key_encrypted))
+    return _settings_out(user)
 
 
 @router.put("/settings")
@@ -242,6 +275,35 @@ def put_settings(body: SettingsBody, user: UserRow = Depends(get_current_user)) 
             update_user_api_key_encrypted(user.id, enc)
         else:
             update_user_api_key_encrypted(user.id, None)
+    if body.llm_model is not None:
+        model = body.llm_model.strip()
+        allowed = set(available_models())
+        if model not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model. Choose one of: {', '.join(available_models())}",
+            )
+        update_user_llm_model(user.id, model)
+    if body.odoo_url is not None or body.odoo_login is not None or body.odoo_password is not None:
+        url = user.odoo_url or ""
+        login = user.odoo_login or ""
+        password_encrypted = user.odoo_password_encrypted
+        if body.odoo_url is not None:
+            url = body.odoo_url.strip()
+        if body.odoo_login is not None:
+            login = body.odoo_login.strip()
+        if body.odoo_password is not None:
+            pwd = body.odoo_password.strip()
+            if pwd:
+                password_encrypted = encrypt_api_key(pwd)
+            else:
+                password_encrypted = None
+        update_user_odoo(
+            user.id,
+            url=url or None,
+            login=login or None,
+            password_encrypted=password_encrypted,
+        )
     fresh = get_user_by_id(user.id)
     assert fresh is not None
-    return SettingsOut(display_name=fresh.display_name, has_openai_key=bool(fresh.openai_api_key_encrypted))
+    return _settings_out(fresh)

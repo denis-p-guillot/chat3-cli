@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/write-version.mjs && tsc -b && vite build && node scripts/write-version.mjs dist",
+    "dev": "node scripts/write-version.mjs && vite",
     "build:grid": "node scripts/build-purplecloud-grid.mjs && node scripts/expand-purplecloud-product-grid.mjs",
     "lint": "eslint .",
     "preview": "vite preview"
