@@ -1671,6 +1671,47 @@
   line-height: 1.2;
 }
 
+.ssh-share-badge {
+  display: inline-block;
+  margin-top: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.18);
+  color: #c4b5fd;
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.ssh-share-panel {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(167, 139, 250, 0.25);
+  border-radius: 0.65rem;
+  background: rgba(30, 16, 53, 0.45);
+}
+
+.ssh-share-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.ssh-share-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+}
+
+.ssh-share-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+}
+
 @media (max-width: 1080px) {
   .ssh-button-row {
     grid-template-columns: 1fr;

@@ -7,9 +7,14 @@ export type SshConnection = {
   auth_mode: 'private_key' | 'password' | 'private_key_password'
   has_private_key: boolean
   has_password: boolean
+  home_workspace_id: number
+  shared_workspace_ids: number[]
+  is_shared: boolean
   created_at: string
   updated_at: string
 }
+
+export type WorkspaceSummary = { id: number; name: string }
 
 async function parseErr(res: Response): Promise<string> {
   let detail = res.statusText
@@ -54,12 +59,28 @@ export async function saveSshConnection(body: {
   return data.connection
 }
 
-export async function deleteSshConnection(connectionId: number): Promise<void> {
-  const res = await fetch(`/api/connectivity/ssh/${connectionId}`, {
+export async function deleteSshConnection(connectionId: number, opts?: { global?: boolean }): Promise<void> {
+  const qs = opts?.global ? '?global=1' : ''
+  const res = await fetch(`/api/connectivity/ssh/${connectionId}${qs}`, {
     method: 'DELETE',
     credentials: 'include',
   })
   if (!res.ok) throw new Error(await parseErr(res))
+}
+
+export async function setSshConnectionWorkspaces(
+  connectionId: number,
+  workspaceIds: number[],
+): Promise<SshConnection> {
+  const res = await fetch(`/api/connectivity/ssh/${connectionId}/workspaces`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ workspace_ids: workspaceIds }),
+  })
+  if (!res.ok) throw new Error(await parseErr(res))
+  const data = (await res.json()) as { connection: SshConnection }
+  return data.connection
 }
 
 export async function testSshConnection(connectionId: number): Promise<{ ok: boolean; stdout: string; stderr: string }> {

@@ -39,6 +39,7 @@ import {
   deleteSshConnection,
   listSshConnections,
   saveSshConnection,
+  setSshConnectionWorkspaces,
   testSshConnection,
   type SshConnection,
 } from './lib/connectivity'
@@ -1328,14 +1329,25 @@ function ChatSession({
     })
   }
 
-  const removeSsh = async (id: number) => {
+  const removeSsh = async (id: number, global = false) => {
     if (busy) return
     try {
-      await deleteSshConnection(id)
+      await deleteSshConnection(id, { global })
       await refreshSshConnections()
+      if (global) {
+        pushNotice('SSH connection deleted from all workspaces.', 'success')
+      } else {
+        pushNotice('SSH connection removed from this workspace.', 'success')
+      }
     } catch (err) {
       setSshErr(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  const shareSshWorkspaces = async (connectionId: number, workspaceIds: number[]) => {
+    await setSshConnectionWorkspaces(connectionId, workspaceIds)
+    await refreshSshConnections()
+    pushNotice('SSH sharing updated.', 'success')
   }
 
   const testSsh = async (id: number) => {
@@ -1671,6 +1683,8 @@ function ChatSession({
             editingName={sshEditingName}
             form={sshForm}
             connections={sshConnections}
+            workspaces={workspaceList}
+            activeWorkspaceId={me.active_workspace_id}
             sshDragType={SSH_CONNECTION_DRAG_TYPE}
             onStartNew={startNewSsh}
             onCloseEditor={() => {
@@ -1681,7 +1695,8 @@ function ChatSession({
             onSubmit={() => void submitSsh()}
             onEdit={editSsh}
             onTest={(id) => void testSsh(id)}
-            onDelete={(id) => void removeSsh(id)}
+            onDelete={(id, global) => void removeSsh(id, global)}
+            onShareWorkspaces={shareSshWorkspaces}
           />
         )}
 

@@ -70,6 +70,19 @@ WORKSPACE_DIR = BASE_DIR / "workspace"
 _workspace_root_ctx: ContextVar[Path | None] = ContextVar("_workspace_root_ctx", default=None)
 _workspace_user_id_ctx: ContextVar[int | None] = ContextVar("_workspace_user_id_ctx", default=None)
 
+
+def active_workspace_id() -> int | None:
+    """Workspace id for the current HTTP agent turn (parsed from scoped root path)."""
+    root = _workspace_root_ctx.get()
+    if root is None:
+        return None
+    parts = root.parts
+    try:
+        idx = parts.index("w")
+        return int(parts[idx + 1])
+    except (ValueError, IndexError, TypeError):
+        return None
+
 ALLOWED_ROOTS: dict[str, Path] = {
     "base_dir": BASE_DIR,
 }
@@ -1245,14 +1258,15 @@ def git_commit_all(
 def ssh_exec(connection_name: str, command: str, timeout_seconds: int) -> str:
     """Execute a command on a saved SSH connection for the active user."""
     user_id = active_workspace_user_id()
-    if user_id is None:
-        return json_result(ok=False, error="No authenticated user context for SSH execution.")
+    ws_id = active_workspace_id()
+    if user_id is None or ws_id is None:
+        return json_result(ok=False, error="No authenticated workspace context for SSH execution.")
 
     from user_crypto import decrypt_api_key
     from user_db import get_ssh_connection_by_name
     from ssh_exec import run_ssh_command
 
-    conn = get_ssh_connection_by_name(user_id, connection_name.strip())
+    conn = get_ssh_connection_by_name(user_id, ws_id, connection_name.strip())
     if conn is None:
         return json_result(ok=False, error=f"SSH connection not found: {connection_name}")
     private_key: str | None = None
@@ -1290,11 +1304,11 @@ def ssh_exec(connection_name: str, command: str, timeout_seconds: int) -> str:
 def ssh_list_connections() -> str:
     """List saved SSH connection profiles for the active authenticated user."""
     user_id = active_workspace_user_id()
-    if user_id is None:
-        return json_result(ok=False, error="No authenticated user context for SSH connectivity.")
-    from user_db import ensure_user_workspaces_ready, list_ssh_connections
+    ws_id = active_workspace_id()
+    if user_id is None or ws_id is None:
+        return json_result(ok=False, error="No authenticated workspace context for SSH connectivity.")
+    from user_db import list_ssh_connections
 
-    ws_id = ensure_user_workspaces_ready(user_id)
     rows = list_ssh_connections(user_id, ws_id)
     return json_result(
         ok=True,

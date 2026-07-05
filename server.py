@@ -50,7 +50,7 @@ def _bootstrap_secret_key() -> None:
 
 _bootstrap_secret_key()
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -92,8 +92,13 @@ from user_db import (
     get_workspace,
     init_db,
     list_ssh_connections,
+    list_ssh_connections_catalog,
     list_workspaces,
+    purge_ssh_connection,
     set_active_workspace,
+    set_ssh_connection_workspaces,
+    share_ssh_connection,
+    unshare_ssh_connection,
     upsert_ssh_connection,
 )
 
@@ -642,6 +647,14 @@ def workspace_download(
 
 class CreateWorkspaceBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
+
+
+class SshConnectionShareBody(BaseModel):
+    workspace_id: int = Field(..., ge=1)
+
+
+class SshConnectionWorkspacesBody(BaseModel):
+    workspace_ids: list[int] = Field(..., min_length=1, max_length=100)
 
 
 class SshConnectionIn(BaseModel):
@@ -1429,6 +1442,7 @@ def _analyze_addon_code_with_logs(code_text: str, log_findings: list[str]) -> tu
 
 
 def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
+    shared = list(row.shared_workspace_ids)
     return {
         "id": row.id,
         "name": row.name,
@@ -1438,6 +1452,9 @@ def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
         "auth_mode": row.auth_mode,
         "has_private_key": bool(row.private_key_encrypted),
         "has_password": bool(row.password_encrypted),
+        "home_workspace_id": row.home_workspace_id,
+        "shared_workspace_ids": shared,
+        "is_shared": len(shared) > 1,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -1447,6 +1464,12 @@ def _ssh_row_to_public(row: SshConnectionRow) -> dict[str, Any]:
 def ssh_connections_list(ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace)) -> dict[str, Any]:
     user, ws_id, _ws = ctx
     rows = list_ssh_connections(user.id, ws_id)
+    return {"connections": [_ssh_row_to_public(r) for r in rows]}
+
+
+@app.get("/api/connectivity/ssh/catalog")
+def ssh_connections_catalog(user: UserRow = Depends(get_current_user)) -> dict[str, Any]:
+    rows = list_ssh_connections_catalog(user.id)
     return {"connections": [_ssh_row_to_public(r) for r in rows]}
 
 
@@ -1490,11 +1513,57 @@ def ssh_connections_upsert(
 @app.delete("/api/connectivity/ssh/{connection_id}")
 def ssh_connections_delete(
     connection_id: int,
+    global_delete: bool = Query(default=False, alias="global"),
     ctx: tuple[UserRow, int, WorkspaceRow] = Depends(current_user_workspace),
 ) -> dict[str, Any]:
     user, ws_id, _ws = ctx
-    if not delete_ssh_connection(user.id, ws_id, connection_id):
+    if global_delete:
+        if not purge_ssh_connection(user.id, connection_id):
+            raise HTTPException(status_code=404, detail="SSH connection not found.")
+    elif not delete_ssh_connection(user.id, ws_id, connection_id):
         raise HTTPException(status_code=404, detail="SSH connection not found.")
+    return {"status": "ok"}
+
+
+@app.post("/api/connectivity/ssh/{connection_id}/share")
+def ssh_connections_share(
+    connection_id: int,
+    body: SshConnectionShareBody,
+    user: UserRow = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not share_ssh_connection(user.id, connection_id, body.workspace_id):
+        raise HTTPException(status_code=404, detail="SSH connection or workspace not found.")
+    row = get_ssh_connection(user.id, body.workspace_id, connection_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="SSH connection not found after sharing.")
+    return {"connection": _ssh_row_to_public(row)}
+
+
+@app.put("/api/connectivity/ssh/{connection_id}/workspaces")
+def ssh_connections_set_workspaces(
+    connection_id: int,
+    body: SshConnectionWorkspacesBody,
+    user: UserRow = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not set_ssh_connection_workspaces(user.id, connection_id, body.workspace_ids):
+        raise HTTPException(status_code=400, detail="Could not update SSH workspace links.")
+    row = next((r for r in list_ssh_connections_catalog(user.id) if r.id == connection_id), None)
+    if row is None:
+        raise HTTPException(status_code=404, detail="SSH connection not found.")
+    return {"connection": _ssh_row_to_public(row)}
+
+
+@app.delete("/api/connectivity/ssh/{connection_id}/share/{workspace_id}")
+def ssh_connections_unshare(
+    connection_id: int,
+    workspace_id: int,
+    user: UserRow = Depends(get_current_user),
+) -> dict[str, Any]:
+    if not unshare_ssh_connection(user.id, connection_id, workspace_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Could not unshare SSH connection (not linked, not found, or last workspace link).",
+        )
     return {"status": "ok"}
 
 
